@@ -1,0 +1,22 @@
+id: bca-evm
+domain: 链上数据
+tags: [EVM, 地址, 余额]
+prior: 2.0
+capabilities:
+  - id: mcp-bca
+    kind: mcp
+    version: ">=1.0,<2"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-bca, tool: evm_balance, args: { address: "{{ input.address }}" }, as: bal }
+    - emit:
+        name: evm_balance_report
+        body: "{{ bal }}"
+artifacts:
+  produces: [evm_balance_report]
+resources:
+  max_parallel: 2
+notes: 需要 BCA_RPC_URL / BCA_CHAIN_ID。缺配置时按契约如实失败——不猜余额。

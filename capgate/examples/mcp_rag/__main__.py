@@ -68,7 +68,11 @@ def search(query: str, k: int = 3) -> dict:
 def list_docs() -> dict:
     """列出语料里的文档。"""
     root = _corpus()
-    docs = [str(p.relative_to(root)).replace("\\", "/") for p in sorted(root.glob("**/*")) if p.is_file()]
+    docs = [
+        str(p.relative_to(root)).replace("\\", "/")
+        for p in sorted(root.glob("**/*"))
+        if p.is_file()
+    ]
     return {"docs": docs, "count": len(docs)}
 
 

@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from .models import Capability, CapabilityRef, CapabilityVersion
+from .models import Capability, CapabilityRef, CapabilityVersion, expand_version
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class Pool:
 
     # ---------------------------------------------------------------- 载入
 
-    def load(self) -> "Pool":
+    def load(self) -> Pool:
         self._caps.clear()
         self.errors.clear()
         if not self.root or not self.root.exists():
@@ -48,7 +48,7 @@ class Pool:
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
                 cap = Capability.model_validate(raw)
-            except Exception as exc:  # noqa: BLE001 - 单个文件坏掉不影响其它能力
+            except Exception as exc:
                 self.errors.append(f"{path.name}: {exc}")
                 continue
             if cap.id in self._caps:
@@ -73,7 +73,7 @@ class Pool:
 
     def resolve(self, ref: CapabilityRef) -> Resolved:
         cap = self.get(ref.id)
-        version = cap.pick(ref.version)
+        version = expand_version(cap.pick(ref.version))
         return Resolved(capability=cap, version=version, exact=version.version, ref=ref)
 
     def resolve_env(self, env: Any) -> dict[str, Resolved]:

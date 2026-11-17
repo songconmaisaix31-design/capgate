@@ -56,8 +56,10 @@ class ScriptedAdapter:
             on_error = step.get("on_error", "fail")
             try:
                 result = await ctx.toolbox.call(capability, tool, args)
-            except Exception as exc:  # noqa: BLE001
-                trace.append({"step": index, "tool": f"{capability}.{tool}", "ok": False, "error": str(exc)})
+            except Exception as exc:
+                trace.append(
+                    {"step": index, "tool": f"{capability}.{tool}", "ok": False, "error": str(exc)}
+                )
                 if on_error == "ignore":
                     ns[step.get("as", f"step{index}")] = None
                     continue

@@ -69,7 +69,7 @@ class CLIAdapter:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(prompt.encode("utf-8")), timeout=timeout
                 )
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 proc.kill()
                 raise AgentError(f"CLI agent 超时（{timeout}s）") from exc
 

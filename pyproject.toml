@@ -30,7 +30,33 @@ capgate = "capgate.cli:main"
 [tool.setuptools.packages.find]
 include = ["capgate*"]
 
+[tool.setuptools.package-data]
+capgate = ["static/*.html"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["integration: 需要本机真实 MCP（BCA / FIT），缺依赖时自动跳过"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["capgate", "tests"]
+extend-exclude = ["var"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC"]
+# RUF001-003 把中文全角标点当"易混淆字符"，对中文代码库是纯噪声
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer 的选项声明就是"默认参数里调函数"
+"capgate/cli.py" = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["capgate"]
+
+[tool.ruff.format]
+quote-style = "double"
+

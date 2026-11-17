@@ -64,7 +64,9 @@ def _read(url: str) -> str:
     if parsed.scheme in ("http", "https"):
         import httpx
 
-        resp = httpx.get(url, timeout=20, follow_redirects=True, headers={"User-Agent": "capgate/0.1"})
+        resp = httpx.get(
+            url, timeout=20, follow_redirects=True, headers={"User-Agent": "capgate/0.1"}
+        )
         resp.raise_for_status()
         return resp.text
     raise ValueError(f"不支持的协议：{parsed.scheme or '(空)'}")

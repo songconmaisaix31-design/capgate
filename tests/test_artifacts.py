@@ -15,7 +15,9 @@ def store(tmp_path) -> ArtifactStore:
 
 
 def test_roundtrip(store):
-    art = store.put("task_1", "crawl_batch", {"url": "u", "links": ["a"], "text": "t"}, env_id="e", run_id="r")
+    art = store.put(
+        "task_1", "crawl_batch", {"url": "u", "links": ["a"], "text": "t"}, env_id="e", run_id="r"
+    )
     assert store.load(art)["url"] == "u"
     assert art.sha256 and len(art.sha256) == 64
     assert art.path.endswith(".json")

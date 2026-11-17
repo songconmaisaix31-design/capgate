@@ -1,0 +1,6 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "evm_balance_report",
+  "type": "object",
+  "description": "上游 evm_balance 的原始返回。形状由 BCA 决定，这里只约束必须是对象，避免把上游字段冻在网关里。"
+}

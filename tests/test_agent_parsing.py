@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from capgate.agents.base import AgentError
 from capgate.agents.cli import _parse as parse_cli
 from capgate.agents.openai_compat import OpenAICompatAdapter
-from capgate.agents.base import AgentError
 
 
 def test_openai_parse_plain_json():
@@ -29,7 +29,7 @@ def test_openai_parse_rejects_non_object_artifacts():
 
 
 def test_cli_parse_tolerates_log_noise():
-    raw = "[info] starting\n[info] done\n{\"artifacts\": {\"c\": true}, \"summary\": \"s\"}\n[info] bye"
+    raw = '[info] starting\n[info] done\n{"artifacts": {"c": true}, "summary": "s"}\n[info] bye'
     assert parse_cli(raw)["artifacts"] == {"c": True}
 
 

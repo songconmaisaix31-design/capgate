@@ -14,8 +14,9 @@ import importlib
 import inspect
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from ..models import EnvManifest, TaskSpec, utcnow
 from ..pool import Pool, Resolved
@@ -39,7 +40,7 @@ class AgentContext:
     env: EnvManifest
     model: str
     artifacts: dict[str, Any]
-    toolbox: "ToolBox"
+    toolbox: ToolBox
     budget_s: int = 300
     run_id: str = ""
     log: Callable[[str, dict[str, Any]], None] = lambda kind, payload: None
@@ -139,7 +140,9 @@ class ToolBox:
                         "type": "function",
                         "function": {
                             "name": f"{self._prefix(cap_id)}__{spec['name']}",
-                            "description": (spec["description"] or f"{cap_id}/{spec['name']}")[:1024],
+                            "description": (spec["description"] or f"{cap_id}/{spec['name']}")[
+                                :1024
+                            ],
                             "parameters": spec["input_schema"],
                         },
                     }
@@ -198,7 +201,9 @@ _ADAPTERS: dict[str, Callable[[dict[str, Any]], AgentAdapter]] = {}
 
 
 def register(name: str):
-    def deco(factory: Callable[[dict[str, Any]], AgentAdapter]) -> Callable[[dict[str, Any]], AgentAdapter]:
+    def deco(
+        factory: Callable[[dict[str, Any]], AgentAdapter],
+    ) -> Callable[[dict[str, Any]], AgentAdapter]:
         _ADAPTERS[name] = factory
         return factory
 

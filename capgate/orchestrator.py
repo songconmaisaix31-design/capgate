@@ -74,7 +74,7 @@ class Orchestrator:
                 result.status = "failed"
             elif any(run.status == "degraded" for run in result.runs):
                 result.status = "degraded"
-        except Exception as exc:  # noqa: BLE001 - 任务级失败要落账并如实返回
+        except Exception as exc:
             result.status = "failed"
             result.error = str(exc)
             self.ledger.event(task.id, "task.error", {"error": str(exc)})
@@ -113,7 +113,8 @@ class Orchestrator:
                 Candidate(id=e.id, score=1.0, detail=reasons.get(e.id, "")) for e in pipeline
             ]
             + [Candidate(id=env_id, score=0.0, detail=why) for env_id, why in skipped.items()],
-            reason=head_note + "；".join(f"{e.id}: {reasons.get(e.id, '主候选')}" for e in pipeline),
+            reason=head_note
+            + "；".join(f"{e.id}: {reasons.get(e.id, '主候选')}" for e in pipeline),
         )
         self.ledger.decide(task.id, plan)
         result.decisions.append(plan)
@@ -159,7 +160,11 @@ class Orchestrator:
                 break
             if env.id in taken:
                 continue
-            gap = wanted_tags() - set().union(*[covered(e) for e in chosen]) if chosen else wanted_tags()
+            gap = (
+                wanted_tags() - set().union(*[covered(e) for e in chosen])
+                if chosen
+                else wanted_tags()
+            )
             if not (gap & covered(env)):
                 skipped.setdefault(env.id, "不覆盖任务的剩余 tag")
                 continue
@@ -209,7 +214,9 @@ class Orchestrator:
 
     # ---------------------------------------------------------------- 执行
 
-    async def _execute(self, task: TaskSpec, pipeline: list[EnvManifest], result: TaskResult) -> None:
+    async def _execute(
+        self, task: TaskSpec, pipeline: list[EnvManifest], result: TaskResult
+    ) -> None:
         produced: set[str] = set()
         payloads: dict[str, Any] = {}
         remaining = list(pipeline)
@@ -290,7 +297,7 @@ class Orchestrator:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             run = RunResult(
                 task_id=task.id,
                 env_id=env.id,
@@ -310,9 +317,7 @@ class Orchestrator:
         declared = _names(env.artifacts.produces)
         emitted = set(execution.output.artifacts)
         for name, payload in execution.output.artifacts.items():
-            artifact = self.store.put(
-                task.id, name, payload, env_id=env.id, run_id=run_id
-            )
+            artifact = self.store.put(task.id, name, payload, env_id=env.id, run_id=run_id)
             self.ledger.add_artifact(task.id, artifact)
             artifacts.append(artifact)
             payloads[name] = payload
@@ -343,7 +348,11 @@ class Orchestrator:
         self.ledger.event(
             task.id,
             "env.finish",
-            {"status": status, "ms": execution.latency_ms, "artifacts": [a.name for a in artifacts]},
+            {
+                "status": status,
+                "ms": execution.latency_ms,
+                "artifacts": [a.name for a in artifacts],
+            },
             env_id=env.id,
         )
         result.runs.append(run)

@@ -143,11 +143,23 @@ class Ledger:
             )
             conn.commit()
 
-    def event(self, task_id: str, kind: str, payload: dict[str, Any] | None = None, env_id: str | None = None) -> None:
+    def event(
+        self,
+        task_id: str,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        env_id: str | None = None,
+    ) -> None:
         with self._conn as conn:
             conn.execute(
                 "INSERT INTO events(ts,task_id,env_id,kind,payload) VALUES (?,?,?,?,?)",
-                (utcnow(), task_id, env_id, kind, json.dumps(payload or {}, ensure_ascii=False, default=str)),
+                (
+                    utcnow(),
+                    task_id,
+                    env_id,
+                    kind,
+                    json.dumps(payload or {}, ensure_ascii=False, default=str),
+                ),
             )
             conn.commit()
 
@@ -162,7 +174,11 @@ class Ledger:
                     decision.stage,
                     decision.strategy,
                     json.dumps(decision.chosen, ensure_ascii=False),
-                    json.dumps([c.model_dump() for c in decision.candidates], ensure_ascii=False, default=str),
+                    json.dumps(
+                        [c.model_dump() for c in decision.candidates],
+                        ensure_ascii=False,
+                        default=str,
+                    ),
                     decision.reason,
                 ),
             )
@@ -226,7 +242,8 @@ class Ledger:
     ) -> None:
         with self._conn as conn:
             conn.execute(
-                "INSERT INTO outcomes(ts,task_id,success,quality,human_edits,note) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO outcomes(ts,task_id,success,quality,human_edits,note)"
+                " VALUES (?,?,?,?,?,?)",
                 (utcnow(), task_id, 1 if success else 0, quality, human_edits, note),
             )
             conn.commit()
@@ -335,7 +352,9 @@ class Ledger:
                 "SELECT COUNT(*) c FROM tasks WHERE status IN ('ok','degraded')"
             ).fetchone()["c"]
             runs = conn.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"]
-            bad_runs = conn.execute("SELECT COUNT(*) c FROM runs WHERE status='failed'").fetchone()["c"]
+            bad_runs = conn.execute("SELECT COUNT(*) c FROM runs WHERE status='failed'").fetchone()[
+                "c"
+            ]
             arts = conn.execute("SELECT COUNT(*) c FROM artifacts").fetchone()["c"]
             # 人工验收只取每个任务的最新一条
             rated = conn.execute(
@@ -377,4 +396,4 @@ def default_ledger(path: Path | str) -> Ledger:
     return Ledger(path)
 
 
-__all__ = ["Ledger", "SCHEMA", "default_ledger", "sqlite3"]
+__all__ = ["SCHEMA", "Ledger", "default_ledger", "sqlite3"]

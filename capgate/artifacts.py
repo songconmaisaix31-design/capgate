@@ -82,11 +82,11 @@ class ArtifactStore:
             required = schema.get("required", []) if isinstance(schema, dict) else []
             missing = [k for k in required if not isinstance(payload, dict) or k not in payload]
             if missing:
-                raise SchemaError(f"产物 {name} 缺少必填字段：{missing}")
+                raise SchemaError(f"产物 {name} 缺少必填字段：{missing}") from None
             return
         try:
             jsonschema.validate(payload, schema)
-        except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+        except Exception as exc:
             raise SchemaError(f"产物 {name} 不符合 schema：{exc}") from exc
 
     @staticmethod

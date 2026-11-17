@@ -9,7 +9,8 @@ from pathlib import Path
 import yaml
 
 from .artifacts import ArtifactStore
-from .config import Paths, paths as resolve_paths
+from .config import Paths
+from .config import paths as resolve_paths
 from .envs import EnvRegistry
 from .ledger import Ledger
 from .mcp import MCPHub
@@ -54,7 +55,7 @@ def load_router_config(root: Path) -> RouterConfig:
     if not path.exists():
         return RouterConfig()
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    known = {f for f in RouterConfig.__dataclass_fields__}
+    known = set(RouterConfig.__dataclass_fields__)
     return RouterConfig(**{k: v for k, v in raw.items() if k in known})
 
 

@@ -9,3 +9,5 @@ versions:
       summarize_links: "capgate.builtin:summarize_links"
       word_freq: "capgate.builtin:word_freq"
       compact_text: "capgate.builtin:compact_text"
+      compact_catalog: "capgate.builtin:compact_catalog"
+      compact_fit_report: "capgate.builtin:compact_fit_report"

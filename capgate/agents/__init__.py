@@ -1,3 +1,6 @@
+from . import cli as _cli  # noqa: F401  - 触发注册
+from . import openai_compat as _openai  # noqa: F401
+from . import scripted as _scripted  # noqa: F401
 from .base import (
     AgentAdapter,
     AgentContext,
@@ -10,9 +13,6 @@ from .base import (
     register,
     render,
 )
-from . import cli as _cli  # noqa: F401  - 触发注册
-from . import openai_compat as _openai  # noqa: F401
-from . import scripted as _scripted  # noqa: F401
 
 __all__ = [
     "AgentAdapter",

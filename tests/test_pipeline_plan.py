@@ -41,5 +41,7 @@ def test_branch_keeps_independent_envs_parallel(system):
 
 def test_unmatched_consumers_are_skipped_with_reason(system):
     task = build_task("pipeline", system.paths.root)
-    pipeline, _, skipped = system.orchestrator._plan_pipeline(task, _ranked(system, ["crawler"]))
+    pipeline, _reasons, _skipped = system.orchestrator._plan_pipeline(
+        task, _ranked(system, ["crawler"])
+    )
     assert [env.id for env in pipeline] == ["crawler"]

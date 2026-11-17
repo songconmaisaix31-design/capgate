@@ -23,10 +23,23 @@ python -m capgate caps            # 看能力池
 python -m capgate demo -s pipeline   # 采集 → 汇总（离线，不需要外网）
 python -m capgate demo -s branch     # 采集 ∥ 链上 → 汇总（真并行）
 python -m capgate serve --port 8787  # 看板 http://127.0.0.1:8787
+
+# 接一个新的 MCP 时，这两条是"确认真能用"的最小动作
+python -m capgate probe mcp-bca               # 真连一次，列出它暴露的工具
+python -m capgate call mcp-bca capability_list  # 调一次，核对真实返回形状
 ```
 
 要求 Python ≥ 3.11，依赖见 `pyproject.toml`。演示用 `file://` 夹具抓页面，
 不依赖任何网络；真实抓取把 `--input url=https://...` 传进去即可。
+
+真实 MCP（BCA / FIT）需要本机已安装，路径用环境变量覆盖，不写死：
+
+```bash
+$env:CAPGATE_BCA_HOME="C:/Users/DW/orca/blockchain-anything"
+$env:CAPGATE_FIT_HOME="D:/repos/fit-protocol"
+python -m capgate solve "区块链有哪些能力可用？" -t 区块链 -t 能力清单
+python -m capgate solve "看一下环境注册表" -t 环境 -t 工具链
+```
 
 ## 核心概念
 
@@ -66,6 +79,23 @@ env 同时是依赖单位、凭据单位、版本单位、隔离单位、失败�
    多环境任务失败，八成不是 Agent 不行，是两边对"数据长什么样"理解不一致。
 3. **失败逐节点声明。** `abort` / `degrade` / `retry-alt`，按 env 配置，不一刀切。
 
+## 已接入的能力
+
+6 个域、7 个环境、6 个能力，完整清单与 tag 词表见 [`docs/domains.md`](docs/domains.md)。
+
+| 域 | env | 能力 | 说明 |
+|---|---|---|---|
+| 数据采集 | `crawler` | `mcp-fetch` | 随包示例 MCP，三次工具调用产出 `crawl_batch` |
+| 内容分析 | `analyst` | `sdk-text` | 消费 `crawl_batch`，进程内 SDK |
+| 链上数据 | `bca-chain` | `mcp-bca` | **真实 BCA**：125 个工具，白名单 7 个，只读清单 |
+| 链上数据 | `bca-evm` | `mcp-bca` | 同上能力，查余额（需 `BCA_RPC_URL` / `BCA_CHAIN_ID`） |
+| 开发环境 | `fit-env` | `mcp-fit` | **真实 FIT**：139 个端点的注册表体检 |
+| 知识问答 | `doc-qa` | `mcp-rag` | 随包示例 RAG，检索本地语料 |
+| 演示 | `chain-watch` | `sdk-chain` | 确定性伪余额，返回体自带 `source: demo-deterministic` |
+
+`bca-chain` 与 `bca-evm` 共享同一个 `mcp-bca` 连接（`shared: true`），第二个 env
+复用的是同一个 Node 进程：实测冷启动约 3.3s，复用后同域第二个 env 约 10ms。
+
 ## 复用清单
 
 原则：能用官方 SDK 和成熟框架就不自己写。
@@ -101,21 +131,24 @@ capgate/
     models.py       契约与数据模型
     ledger.py       SQLite 账本（决策链 + 聚合打分）
     artifacts.py    内容寻址产物库 + schema 校验
-    pool.py         能力池（版本钉死）
+    pool.py         能力池（版本钉死 + ${VAR} 路径展开）
     envs.py         env 注册表
     router.py       双层路由（Thompson + pin + LLM 兜底钩子）
     supervisor.py   环境监管：实例复用、限流、TTL、热池
     orchestrator.py 任务编排：契约组流水线、并行波次、失败策略
     mcp/client.py   MCP 长连接宿主（共享能力单例）
     agents/         适配器：scripted（确定性快路径）/ openai 兼容 / CLI
-    server.py       FastAPI + 看板
+    server.py       FastAPI
+    static/         看板（纯静态资源，不塞进 Python 字符串）
     cli.py          命令行
     examples/       随包两个示例 MCP server（抓取、语料检索）
-  envs/             领域环境声明
-  capabilities/     能力声明
+  envs/             领域环境声明（按域）
+  capabilities/     能力声明（含真实 BCA / FIT）
   schemas/          产物 JSON Schema
   fixtures/         离线夹具（页面 + 语料）
-  tests/            46 个测试
+  scripts/          工具脚本（批量建 issue）
+  .github/issues/   待办事项（13 个，带验收标准）
+  tests/            49 个测试（含 3 个真实 MCP 集成用例）
 ```
 
 ## 扩展
@@ -141,14 +174,26 @@ capgate/
 - 单链路由（`shared: true`）尚不支持按剩余配额选择性重试；新任务可能先失败一小段时间。
 - SQLite 3.50.4 落在 WAL-reset 竞态区间（修复于 3.51.3）。单进程单连接风险低；
   多进程并发写请设 `CAPGATE_SQLITE_JOURNAL=delete`，`doctor` 会提示。
-- 演示用的链上余额是**确定性伪数据**，不是真实链上查询。
+- `mcp-bca` 默认指向 `C:/Users/DW/orca/blockchain-anything`（已构建副本）——
+  源码仓库 `repos/blockchain-anything` 目前 `npm run build` 不过，见 issue #012。
+- FIT 的 MCP server 会往 stdout 打两行日志，污染协议流；当前客户端容忍，见 issue #013。
+- 演示用的 `chain-watch` 是确定性伪数据，返回体自带 `source: demo-deterministic`；
+  真实链上能力是 `bca-chain` / `bca-evm`。
 
 ## 下一步
 
-1. 把 `retry-alt` 补成真正的候选替换，并给"失败但可降级"补一个产物完整性检查。
-2. 接一个真实 LLM 的 `openai` 端点，跑同一批任务，让账本里出现真实的 `(env × model)` 对比。
-3. 给产物库加 TTL 与引用计数清理。
-4. 把 `llm_fallback` 的兜底裁决接起来（`Router` 已留 `judge` 钩子，缺一个实现）。
+完整待办在 [`.github/issues/`](.github/issues/README.md)（13 个，带背景、期望与验收标准），
+可用 `./scripts/file-issues.ps1` 直接建成 GitHub issue。
+
+建议顺序：**#010 CI → #001 retry-alt → #012 上游 BCA 构建 → #009 tag 词表**，其余按 p2 排。
+
+## 工程规范
+
+- 只认 `ruff`（lint + format），配置在 `pyproject.toml`；`pre-commit` 已配好钩子。
+- 改行为必须加测试；需要真实 MCP 的用例打 `@pytest.mark.integration`，缺依赖就 skip，
+  **不许用 mock 假装通过**。
+- 提交用 Conventional Commits，一个提交只做一件事。
+- 详细约定见 [`CONTRIBUTING.md`](CONTRIBUTING.md)，取舍记录见 [`docs/decisions.md`](docs/decisions.md)。
 
 ## 许可
 

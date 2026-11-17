@@ -82,8 +82,11 @@ def test_no_tag_match_falls_back_and_says_so(tmp_path):
 def test_second_layer_picks_best_model(tmp_path):
     led = Ledger(tmp_path / "l.db")
     reg = _registry()
-    env = EnvManifest(id="m", domain="d", tags=["t"], agent={"adapter": "scripted", "models": ["m1", "m2"]})  # type: ignore[arg-type]
+    env = EnvManifest(
+        id="m", domain="d", tags=["t"], agent={"adapter": "scripted", "models": ["m1", "m2"]}
+    )  # type: ignore[arg-type]
     reg.envs["m"] = env
+
     def seed(model: str, wins: int, fails: int) -> None:
         for i in range(wins + fails):
             task = TaskSpec(goal="g", tags=["t"])

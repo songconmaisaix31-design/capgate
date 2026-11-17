@@ -6,7 +6,6 @@ import asyncio
 import json
 import sqlite3
 import sys
-from pathlib import Path
 from typing import Any
 
 import typer
@@ -19,6 +18,11 @@ from .system import System, build, load_router_config
 
 app = typer.Typer(add_completion=False, help="capgate —— 本地能力网关")
 console = Console()
+
+
+def emit_json(obj: Any) -> None:
+    """机器可读输出走裸 stdout：rich 的软换行会把 JSON 字符串切断。"""
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
 
 
 def _system(root: str | None = None, strategy: str | None = None) -> System:
@@ -55,11 +59,14 @@ def doctor(root: str = typer.Option(None, "--root", help="仓根目录（默认�
         import importlib.metadata as md
 
         console.print(f"[bold]mcp[/bold] {md.version('mcp')}")
-    except Exception:  # noqa: BLE001
+    except Exception:
         console.print("[red]mcp 未安装[/red]（pip install 'mcp>=1.2,<2'）")
 
     system = build(p.root)
-    console.print(f"[bold]envs[/bold] {len(system.registry.envs)}  [bold]capabilities[/bold] {len(system.pool.all())}")
+    console.print(
+        f"[bold]envs[/bold] {len(system.registry.envs)}  "
+        f"[bold]capabilities[/bold] {len(system.pool.all())}"
+    )
     if system.errors:
         console.print("[red]载入问题：[/red]")
         for err in system.errors:
@@ -70,7 +77,7 @@ def doctor(root: str = typer.Option(None, "--root", help="仓根目录（默认�
         for ref in env.capabilities:
             try:
                 system.pool.resolve(ref)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 console.print(f"[red]{env.id} → {ref.id}@{ref.version} 无法解析：{exc}[/red]")
     system.ledger.close()
 
@@ -89,6 +96,79 @@ def caps(root: str = typer.Option(None, "--root")) -> None:
     system = _system(root)
     render.caps_table(system.pool, console)
     system.ledger.close()
+
+
+@app.command()
+def probe(
+    capability: str = typer.Argument(..., help="能力 id"),
+    version: str = typer.Option("*", "--version", help="版本说明符"),
+    root: str = typer.Option(None, "--root"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """真连一次某个能力，打印它实际暴露的工具。接新 MCP 时先用它验。"""
+
+    from rich.table import Table
+
+    from .mcp import MCPConnection
+    from .models import CapabilityRef
+
+    system = _system(root)
+    spec = system.pool.resolve(CapabilityRef(id=capability, version=version)).version
+
+    async def main() -> int:
+        conn = await MCPConnection.open(spec, label=capability)
+        try:
+            tools = conn.tool_specs()
+        finally:
+            await conn.close()
+        if as_json:
+            emit_json(tools)
+            return 0
+        table = Table(title=f"{capability}@{spec.version} · {len(tools)} tools", header_style="dim")
+        for col in ("tool", "说明", "参数"):
+            table.add_column(col)
+        for tool in tools:
+            props = list((tool.get("input_schema") or {}).get("properties", {}))
+            table.add_row(tool["name"], (tool["description"] or "")[:70], ", ".join(props[:6]))
+        console.print(table)
+        return 0
+
+    try:
+        code = asyncio.run(main())
+    finally:
+        system.ledger.close()
+    raise typer.Exit(code)
+
+
+@app.command(name="call")
+def call_tool(
+    capability: str = typer.Argument(..., help="能力 id"),
+    tool: str = typer.Argument(..., help="工具名"),
+    args: str = typer.Option("{}", "--args", help="JSON 参数"),
+    version: str = typer.Option("*", "--version"),
+    root: str = typer.Option(None, "--root"),
+) -> None:
+    """直接调一次某个能力上的工具，用来核对真实输出形状。"""
+    from .mcp import MCPConnection
+    from .models import CapabilityRef
+
+    payload = json.loads(args)
+    if not isinstance(payload, dict):
+        raise typer.BadParameter("--args 必须是 JSON 对象")
+    system = _system(root)
+    spec = system.pool.resolve(CapabilityRef(id=capability, version=version)).version
+
+    async def main():
+        conn = await MCPConnection.open(spec, label=capability)
+        try:
+            return await conn.call(tool, payload)
+        finally:
+            await conn.close()
+
+    try:
+        emit_json(asyncio.run(main()))
+    finally:
+        system.ledger.close()
 
 
 @app.command(name="demo")
@@ -139,7 +219,7 @@ def solve(
             spec = TaskSpec(goal=goal, tags=list(tag), inputs=inputs, hint_envs=list(hint))
             result = await system.orchestrator.run(spec)
             if as_json:
-                console.print(json.dumps(json.loads(result.model_dump_json()), ensure_ascii=False, indent=2))
+                emit_json(json.loads(result.model_dump_json()))
             else:
                 render.result_panel(result, console)
                 render.artifacts_view(result, console)
@@ -177,7 +257,9 @@ def rate(
 
 
 @app.command()
-def stats(root: str = typer.Option(None, "--root"), task_type: str = typer.Option(None, "--type")) -> None:
+def stats(
+    root: str = typer.Option(None, "--root"), task_type: str = typer.Option(None, "--type")
+) -> None:
     """账本聚合。"""
     system = _system(root)
     render.stats_panel(system.ledger.stats(), system.ledger.perf(task_type=task_type), console)

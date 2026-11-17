@@ -15,7 +15,7 @@ class EnvRegistry:
         self.envs: dict[str, EnvManifest] = {}
         self.errors: list[str] = []
 
-    def load(self) -> "EnvRegistry":
+    def load(self) -> EnvRegistry:
         self.envs.clear()
         self.errors.clear()
         if not self.root or not self.root.exists():
@@ -24,7 +24,7 @@ class EnvRegistry:
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
                 manifest = EnvManifest.model_validate(raw)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.errors.append(f"{path.name}: {exc}")
                 continue
             if manifest.id in self.envs:

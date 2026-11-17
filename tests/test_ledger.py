@@ -67,7 +67,7 @@ def test_perf_filters_by_task_type(tmp_path):
 
 
 def test_chain_has_decisions_and_runs(tmp_path):
-    from capgate.models import Candidate, Decision
+    from capgate.models import Decision
 
     led = Ledger(tmp_path / "l.db")
     task = _task(led)

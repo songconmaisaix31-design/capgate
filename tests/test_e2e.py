@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from capgate import demo
 from capgate.models import TaskSpec
 
@@ -41,7 +39,7 @@ async def test_branch_demo_runs_envs_in_parallel(system):
 
     balance = system.store.load(next(a for a in result.artifacts if a.name == "chain_balance"))
     assert balance["address"].startswith("0x")
-    assert "demo-deterministic" == balance["source"]
+    assert balance["source"] == "demo-deterministic"
 
 
 async def test_doc_demo_uses_rag_env(system):
@@ -54,7 +52,7 @@ async def test_doc_demo_uses_rag_env(system):
 
 
 async def test_missing_input_fails_honestly(system):
-    task = TaskSpec(goal="查余额但没给地址", tags=["链上"], inputs={}, budget_s=60)
+    task = TaskSpec(goal="查余额但没给地址", tags=["演示链"], inputs={}, budget_s=60)
     result = await system.orchestrator.run(task)
 
     assert result.status == "failed"

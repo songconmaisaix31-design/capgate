@@ -1,0 +1,20 @@
+id: mcp-bca
+kind: mcp
+title: BCA 区块链工具箱（EVM / Solana / Sui / Aptos + 合约工作台，含上游 MCP 聚合）
+versions:
+  - version: "1.0.0"
+    transport: stdio
+    command: node
+    args:
+      - "${CAPGATE_BCA_HOME:C:/Users/DW/orca/blockchain-anything}/dist/mcp/main.js"
+    cwd: "${CAPGATE_BCA_HOME:C:/Users/DW/orca/blockchain-anything}"
+    # 白名单：BCA 暴露 125 个工具，全量塞进上下文会挤掉真正要用的那几个
+    tools:
+      - capability_list
+      - capability_search
+      - workstation_list
+      - workstation_search
+      - system_doctor
+      - evm_status
+      - evm_balance
+    startup_timeout: 180

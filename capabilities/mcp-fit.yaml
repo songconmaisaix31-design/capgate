@@ -1,0 +1,14 @@
+id: mcp-fit
+kind: mcp
+title: FIT 工具注册表（env 工具 / skill / MCP / ACP / A2A 的统一入口）
+versions:
+  - version: "0.2.0"
+    transport: stdio
+    command: node
+    args:
+      - "${CAPGATE_FIT_HOME:D:/repos/fit-protocol}/bin/fit.mjs"
+      - "serve"
+      - "mcp"
+    cwd: "${CAPGATE_FIT_HOME:D:/repos/fit-protocol}"
+    tools: [fit_list, fit_resolve, fit_register, fit_register_agent, fit_probe, fit_doctor]
+    startup_timeout: 45

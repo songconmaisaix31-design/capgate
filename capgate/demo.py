@@ -22,7 +22,7 @@ SCENARIOS: dict[str, dict] = {
     },
     "branch": {
         "goal": "抓取示例站点、汇总链接，同时查一个地址的余额",
-        "tags": ["爬虫", "链上", "汇总"],
+        "tags": ["爬虫", "演示链", "汇总"],
         "extra": {"address": "0x8f3a2b7c9d1e4f5a6b0c2d3e4f5a6b7c8d9e0f1a"},
         "hint": "并行分叉：crawler ∥ chain-watch → analyst",
     },

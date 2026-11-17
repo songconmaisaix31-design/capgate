@@ -1,6 +1,6 @@
 id: chain-watch
-domain: 链上数据
-tags: [链上, 区块链, 余额]
+domain: 演示
+tags: [演示链, 演示余额]
 prior: 2.0
 capabilities:
   - id: sdk-chain
@@ -17,4 +17,4 @@ agent:
         body: "{{ bal }}"
 artifacts:
   produces: [chain_balance]
-notes: 与采集 env 无契约依赖，因此能和它并行跑，互不阻塞。
+notes: 演示桩：确定性伪余额，**不是真实链上查询**。真实链上能力见 bca-chain / bca-evm。

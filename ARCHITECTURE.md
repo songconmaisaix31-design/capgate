@@ -88,6 +88,14 @@
 - "表现好的留下"落成三条独立机制：热实例（本模块）、默认路由意图（账本驱动 router）、
   可复现快照（版本钉死 + 账本记录 exact version）。三者互不替代。
 
+### `pool.py` — 版本、白名单、路径
+
+- `CapabilityVersion.tools` 是白名单：BCA 有 125 个工具，`mcp-bca` 只放行 7 个。
+  工具描述会占上下文，也会让模型有机会调用根本不该自动调的东西（签名、写链）。
+- `command / args / cwd / url / env` 支持 `${VAR:default}`，在 `Pool.resolve` 时展开，
+  所以能力声明既能换机器只改一处，又不强迫使用者先配环境变量。
+- 解析结果是 `Resolved`，`exact` 版本会写进 `runs.meta.resolved`。
+
 ### `mcp/client.py` — 为什么要有 connection host
 
 MCP 的 stdio 客户端上下文必须在**同一个 task** 里进出。所以每个连接开一个常驻 host task
@@ -147,7 +155,10 @@ MCP 的 stdio 客户端上下文必须在**同一个 task** 里进出。所以�
 
 - 单进程、单机、单人。SQLite 同步写，写路径微秒级，不阻塞事件循环。
 - 一次任务最多 `MAX_ENVS_PER_TASK = 8` 个 env。
-- 演示链路里 `crawler` 约 2.3s（三次 MCP 往返 + 子进程启动），其余 env 是毫秒级。
+- 实测：示例 MCP 链路的 `crawler` 约 2.3s（三次 MCP 往返 + Python 子进程启动）；
+  `fit-env` 约 0.8s；`bca-chain` 约 3.3s（Node + 大量 SDK 加载）。
+  同一能力被第二个 env 复用时降到 10ms 级——这是 `shared: true` 的主要收益。
+- 每个共享 MCP 常驻一个子进程；冷启动慢的在能力声明里调 `startup_timeout`（BCA 给了 180s）。
 
 超出以上假设（多用户、多机、高并发）需要换的部件：账本 → Postgres、产物库 → 对象存储、
 `MCPHub` → 独立服务。分层设计就是为了让这些替换局限在一层里。

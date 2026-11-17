@@ -12,10 +12,14 @@ def test_read_endpoints(system):
     assert health["ok"] is True and health["errors"] == []
 
     envs = client.get("/api/envs").json()
-    assert {e["id"] for e in envs} == {"crawler", "analyst", "chain-watch", "doc-qa"}
+    assert {"crawler", "analyst", "chain-watch", "doc-qa", "bca-chain", "bca-evm", "fit-env"} <= {
+        e["id"] for e in envs
+    }
 
     caps = client.get("/api/caps").json()
-    assert {c["id"] for c in caps} == {"mcp-fetch", "mcp-rag", "sdk-text", "sdk-chain"}
+    assert {"mcp-fetch", "mcp-rag", "mcp-bca", "mcp-fit", "sdk-text", "sdk-chain"} <= {
+        c["id"] for c in caps
+    }
 
     stats = client.get("/api/stats").json()
     assert stats["ledger"]["tasks"] == 0

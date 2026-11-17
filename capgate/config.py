@@ -55,7 +55,7 @@ class Paths:
     def schemas(self) -> Path:
         return self.root / "schemas"
 
-    def ensure(self) -> "Paths":
+    def ensure(self) -> Paths:
         for d in (self.var, self.artifacts, self.logs):
             d.mkdir(parents=True, exist_ok=True)
         return self

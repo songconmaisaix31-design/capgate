@@ -1,0 +1,35 @@
+id: fit-env
+domain: 开发环境
+tags: [环境, 工具链, 依赖, 版本, 环境管理]
+prior: 2.5
+capabilities:
+  - id: mcp-fit
+    kind: mcp
+    version: ">=0.2,<0.3"
+    shared: true
+  - id: sdk-text
+    kind: sdk
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-fit, tool: fit_doctor, args: {}, as: doctor }
+    - { capability: mcp-fit, tool: fit_list, args: {}, as: listing }
+    - capability: sdk-text
+      tool: compact_fit_report
+      args:
+        doctor: "{{ doctor }}"
+        listing: "{{ listing }}"
+      as: report
+    - emit:
+        name: env_report
+        body: "{{ report }}"
+artifacts:
+  produces: [env_report]
+resources:
+  warm: true
+  ttl_s: 1800
+  max_parallel: 2
+notes: 真实 FIT MCP。只读体检，不改注册表；需要写入的注册动作不在自动链路里。

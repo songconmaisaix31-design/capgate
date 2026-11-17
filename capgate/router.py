@@ -14,8 +14,9 @@ LLM 只做兜底裁决，且在这里是可插拔的：默认关闭，开启后�
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from .envs import EnvRegistry
 from .ledger import Ledger
@@ -190,7 +191,7 @@ class Router:
         scored.sort(key=lambda r: r["score"], reverse=True)
 
         if self.config.strategy == "epsilon" and self.rng.random() < self.config.epsilon:
-            head, rest = scored[0], scored[1:]
+            rest = scored[1:]
             if rest:
                 swap = self.rng.choice(rest)
                 scored = [swap] + [r for r in scored if r is not swap]
@@ -228,7 +229,7 @@ class Router:
         ]
         try:
             picked = self.judge(task, payload)  # type: ignore[misc]
-        except Exception:  # noqa: BLE001 - 兜底失败就退回算法结果
+        except Exception:
             return None
         return picked or None
 

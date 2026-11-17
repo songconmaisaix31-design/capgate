@@ -67,20 +67,28 @@ class MCPConnection:
     # ---------------------------------------------------------------- 生命周期
 
     @classmethod
-    async def open(cls, spec: CapabilityVersion, label: str = "") -> "MCPConnection":
+    async def open(cls, spec: CapabilityVersion, label: str = "") -> MCPConnection:
         conn = cls(spec, label=label)
         await conn.start()
         return conn
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._host(), name=f"mcp-host:{self.label}")
-        await self._ready.wait()
+        timeout = float(getattr(self.spec, "startup_timeout", 60.0) or 60.0)
+        try:
+            await asyncio.wait_for(self._ready.wait(), timeout=timeout)
+        except TimeoutError:
+            self._stop.set()
+            if self._task:
+                self._task.cancel()
+            raise MCPError(f"MCP 启动超时（{self.label}，{timeout}s）") from None
         if self._error:
             raise MCPError(f"MCP 连接失败（{self.label}）：{self._error}") from self._error
 
     async def _host(self) -> None:
-        from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
+
+        from mcp import ClientSession, StdioServerParameters
 
         try:
             async with AsyncExitStack() as stack:
@@ -110,7 +118,7 @@ class MCPConnection:
                 self._session = session
                 self._ready.set()
                 await self._stop.wait()
-        except BaseException as exc:  # noqa: BLE001 - 全部转成 ready 上的错误
+        except BaseException as exc:
             self._error = exc
             self._ready.set()
         finally:
@@ -121,7 +129,7 @@ class MCPConnection:
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
             finally:
                 self._task = None
@@ -144,14 +152,16 @@ class MCPConnection:
             )
         return out
 
-    async def call(self, name: str, arguments: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> Any:
+    async def call(
+        self, name: str, arguments: dict[str, Any], timeout_s: float = DEFAULT_TIMEOUT
+    ) -> Any:
         if not self._session:
             raise MCPError(f"MCP 未就绪（{self.label}）")
         if name not in self._tools:
             raise MCPError(f"{self.label} 没有工具 {name!r}（可用：{sorted(self._tools)}）")
         async with self._sem:
             result = await asyncio.wait_for(
-                self._session.call_tool(name, arguments or {}), timeout=timeout
+                self._session.call_tool(name, arguments or {}), timeout=timeout_s
             )
         if getattr(result, "isError", False):
             raise MCPError(f"{self.label}.{name} 返回错误：{_normalize(result)}")

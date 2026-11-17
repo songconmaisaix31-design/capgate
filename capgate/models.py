@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -22,7 +24,7 @@ FailurePolicy = Literal["abort", "degrade", "retry-alt"]
 
 
 def utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def new_id(prefix: str) -> str:
@@ -62,6 +64,7 @@ class CapabilityVersion(BaseModel):
     entries: dict[str, str] = Field(default_factory=dict)  # tool 名 -> "module:function"
     env: dict[str, str] = Field(default_factory=dict)
     tools: list[str] = Field(default_factory=list)  # 允许暴露的工具白名单
+    startup_timeout: float = 60.0  # 冷启动上限；Node 系 MCP 可能很慢
 
 
 class Capability(BaseModel):
@@ -219,6 +222,29 @@ class TaskResult(BaseModel):
 
 # ---------------------------------------------------------------- 工具
 
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}")
+
+
+def expand(text: str) -> str:
+    """展开 ``${VAR:default}``，让能力声明不必把绝对路径写死。"""
+
+    def sub(match: re.Match[str]) -> str:
+        return os.environ.get(match.group(1), match.group(2) or "")
+
+    return _VAR.sub(sub, text)
+
+
+def expand_version(version: CapabilityVersion) -> CapabilityVersion:
+    return version.model_copy(
+        update={
+            "command": expand(version.command) if version.command else None,
+            "args": [expand(a) for a in version.args],
+            "cwd": expand(version.cwd) if version.cwd else None,
+            "url": expand(version.url) if version.url else None,
+            "env": {k: expand(v) for k, v in version.env.items()},
+        }
+    )
+
 
 def resolve_version(versions: list[CapabilityVersion], specifier: str) -> CapabilityVersion:
     """按 PEP 440 说明符选最高版本；没有匹配就报错，绝不静默降级。"""
@@ -232,5 +258,7 @@ def resolve_version(versions: list[CapabilityVersion], specifier: str) -> Capabi
 
     matched = [(Version(v.version), v) for v in versions if spec.contains(v.version)]
     if not matched:
-        raise LookupError(f"没有满足 {specifier!r} 的版本（已注册：{[v.version for v in versions]}）")
+        raise LookupError(
+            f"没有满足 {specifier!r} 的版本（已注册：{[v.version for v in versions]}）"
+        )
     return max(matched, key=lambda kv: kv[0])[1]

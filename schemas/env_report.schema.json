@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "env_report",
+  "type": "object",
+  "required": ["total", "by_kind", "generated_at"],
+  "properties": {
+    "root": { "type": ["string", "null"] },
+    "total": { "type": "integer" },
+    "by_kind": { "type": "object" },
+    "agents": { "type": "integer" },
+    "broken": { "type": "array" },
+    "sample": { "type": "array" },
+    "updated_at": { "type": ["string", "null"] },
+    "generated_at": { "type": "string" }
+  }
+}

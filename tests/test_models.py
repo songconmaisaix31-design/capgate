@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from capgate.models import ArtifactContract, Capability, CapabilityVersion, EnvManifest, resolve_version
+from capgate.models import (
+    ArtifactContract,
+    Capability,
+    CapabilityVersion,
+    EnvManifest,
+    resolve_version,
+)
 
 VERSIONS = [
     CapabilityVersion(version="0.1.0"),

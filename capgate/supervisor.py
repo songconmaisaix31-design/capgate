@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from .agents import AgentContext, AgentError, AgentOutput, ToolBox, build
 from .models import EnvManifest, TaskSpec, new_id
@@ -92,11 +94,9 @@ class Supervisor:
         await self._dispose(inst)
 
     async def _dispose(self, inst: EnvInstance) -> None:
-        # 非共享能力是 per-instance 连接，随实例一起关掉
-        try:
+        # 非共享能力是 per-instance 连接，随实例一起关掉；回收失败不能影响主流程
+        with contextlib.suppress(Exception):
             await self.hub.drop_prefix(f"{inst.instance_id}:")
-        except Exception:  # noqa: BLE001 - 回收失败不能影响主流程
-            pass
 
     # ---------------------------------------------------------------- 执行
 
@@ -131,7 +131,7 @@ class Supervisor:
                 output = await asyncio.wait_for(
                     adapter.run(ctx), timeout=float(budget_s or task.budget_s)
                 )
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 await self.release(inst, env, keep=False)
                 raise AgentError(f"env {env.id} 执行超时（{budget_s or task.budget_s}s）") from exc
             except BaseException:

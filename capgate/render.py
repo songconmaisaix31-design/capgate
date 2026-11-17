@@ -23,15 +23,17 @@ def result_panel(result: TaskResult, console: Console) -> None:
     console.print(
         Panel(
             f"[bold]{result.task.goal}[/bold]\n"
-            f"task={result.task.id}  type={result.task.task_type}  status=[{color}]{result.status}[/{color}]  "
-            f"{result.latency_ms}ms",
+            f"task={result.task.id}  type={result.task.task_type}  "
+            f"status=[{color}]{result.status}[/{color}]  {result.latency_ms}ms",
             title="任务",
             border_style=color,
         )
     )
 
     for decision in result.decisions:
-        console.print(f"[bold cyan]▸ {decision.stage}[/bold cyan]  ({decision.strategy})  → {decision.chosen}")
+        console.print(
+            f"[bold cyan]▸ {decision.stage}[/bold cyan]  ({decision.strategy})  → {decision.chosen}"
+        )
         console.print(f"  [dim]{decision.reason}[/dim]")
         if decision.candidates:
             table = Table(show_header=True, header_style="dim", box=None, pad_edge=False)
@@ -94,7 +96,9 @@ def chain_view(chain: dict[str, Any], console: Console) -> None:
         )
         console.print(f"  [dim]{decision['reason']}[/dim]")
         for cand in decision["candidates"]:
-            console.print(f"    · {cand['id']}  {cand['score']:.3f}  n={cand['success'] + cand['fail']}")
+            console.print(
+                f"    · {cand['id']}  {cand['score']:.3f}  n={cand['success'] + cand['fail']}"
+            )
     for run in chain.get("runs", []):
         console.print(f"[green]run[/green] {run['env_id']} {run['status']} {run['latency_ms']}ms")
     for art in chain.get("artifacts", []):

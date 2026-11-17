@@ -85,14 +85,16 @@ class OpenAICompatAdapter:
                         result = await ctx.toolbox.call(capability, tool, args)
                         payload_out: Any = result
                         ok = True
-                    except Exception as exc:  # noqa: BLE001 - 工具失败要回灌给模型
+                    except Exception as exc:
                         payload_out, ok = {"error": str(exc)}, False
                     trace.append({"turn": turn, "tool": name, "ok": ok})
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call.get("id", ""),
-                            "content": json.dumps(payload_out, ensure_ascii=False, default=str)[:20000],
+                            "content": json.dumps(payload_out, ensure_ascii=False, default=str)[
+                                :20000
+                            ],
                         }
                     )
         raise AgentError(f"超过最大轮数 {max_turns} 仍未收敛")
@@ -125,7 +127,9 @@ class OpenAICompatAdapter:
         artifacts = data.get("artifacts") or {}
         if not isinstance(artifacts, dict):
             raise AgentError("模型返回的 artifacts 必须是对象")
-        return AgentOutput(artifacts=artifacts, text=str(data.get("summary", "")), trace=trace, usage=usage)
+        return AgentOutput(
+            artifacts=artifacts, text=str(data.get("summary", "")), trace=trace, usage=usage
+        )
 
 
 @register("openai")

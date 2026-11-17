@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from datetime import UTC
 from urllib.parse import urlparse
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z\-']+")
@@ -60,3 +61,53 @@ def address_balance(address: str = "") -> dict:
 def compact_text(text: str = "", limit: int = 600) -> dict:
     text = re.sub(r"\s+", " ", text or "").strip()
     return {"text": text[: int(limit)], "chars": len(text), "truncated": len(text) > int(limit)}
+
+
+def _now() -> str:
+    from datetime import datetime
+
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def compact_catalog(
+    capabilities: list | None = None, workstations: list | None = None, sample: int = 12
+) -> dict:
+    """BCA 的能力/工作台清单压成可给人看的报告。
+
+    原始清单有上百条、每条带描述，直接当产物会撑爆上下文，也会让下游只能全量读。
+    """
+    caps = [c for c in (capabilities or []) if isinstance(c, dict)]
+    statuses: Counter[str] = Counter()
+    missing: set[str] = set()
+    for cap in caps:
+        availability = cap.get("availability") or {}
+        statuses[str(availability.get("status") or "unknown")] += 1
+        missing.update(availability.get("missing") or [])
+    stations = [w for w in (workstations or []) if isinstance(w, dict)]
+    return {
+        "capability_count": len(caps),
+        "by_status": dict(statuses),
+        "missing_requirements": sorted(missing),
+        "workstations": [{"id": w.get("id"), "name": w.get("name")} for w in stations],
+        "sample": [c.get("name") for c in caps[: int(sample)]],
+        "generated_at": _now(),
+    }
+
+
+def compact_fit_report(
+    doctor: dict | None = None, listing: dict | None = None, sample: int = 10
+) -> dict:
+    """FIT 注册表体检报告：多少端点、坏了几个、各类型分布。"""
+    doctor = doctor or {}
+    endpoints = (listing or {}).get("endpoints") or []
+    kinds = Counter(str(e.get("kind") or "unknown") for e in endpoints)
+    return {
+        "root": doctor.get("root"),
+        "total": doctor.get("total", len(endpoints)),
+        "by_kind": dict(kinds or doctor.get("byKind") or {}),
+        "agents": doctor.get("agents", 0),
+        "broken": doctor.get("broken") or [],
+        "sample": [f"{e.get('kind')}:{e.get('name')}" for e in endpoints[: int(sample)]],
+        "updated_at": doctor.get("updatedAt"),
+        "generated_at": _now(),
+    }

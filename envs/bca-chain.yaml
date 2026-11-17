@@ -1,0 +1,35 @@
+id: bca-chain
+domain: 链上数据
+tags: [链上, 区块链, 区块链工具, 能力清单]
+prior: 2.5
+capabilities:
+  - id: mcp-bca
+    kind: mcp
+    version: ">=1.0,<2"
+    shared: true
+  - id: sdk-text
+    kind: sdk
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-bca, tool: capability_list, args: {}, as: caps }
+    - { capability: mcp-bca, tool: workstation_list, args: {}, as: ws }
+    - capability: sdk-text
+      tool: compact_catalog
+      args:
+        capabilities: "{{ caps }}"
+        workstations: "{{ ws }}"
+      as: catalog
+    - emit:
+        name: bca_catalog
+        body: "{{ catalog }}"
+artifacts:
+  produces: [bca_catalog]
+resources:
+  warm: true
+  ttl_s: 1800
+  max_parallel: 2
+notes: 真实 BCA MCP（125 个工具）。本 env 只读清单，不触网、不签名、不写链。
