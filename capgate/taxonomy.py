@@ -7,11 +7,19 @@
 设计约束：
 
 - **纯数据 + 纯函数**：本模块不依赖账本 / 路由 / 编排，只依赖 ``yaml`` 与标准库，
-  可独立测试。接入方（system / orchestrator / cli / server）只需 ``Taxonomy.load(...)``
-  一次，之后用 ``normalize`` / ``normalize_tags`` / ``task_types`` 三个入口。
+  可独立测试。接入方（system / orchestrator / cli / server）只需
+  ``Taxonomy.load(..., env_tags=registry.all())`` 一次，之后用 ``normalize`` /
+  ``normalize_tags`` / ``normalize_type`` / ``task_types`` 几个入口。
+- **根词表只管公共别名与版本**：``taxonomy.yaml`` 里的 terms 是跨环境共享的同义词
+  归并（如"抓取 → 爬虫"）；新增业务域只写 env YAML，环境自己声明的 tag 通过
+  :meth:`with_environment_tags` 自动登记为标准词，不需要改根词表。
+- **已登记优先**：标准词、别名、pin 的映射优先于环境 tag 的自动登记，环境 tag
+  不会覆盖已有归并。
+- **显式 task_type 严格**：:meth:`normalize_type` 遇到词表外的取值抛
+  :class:`TaxonomyError`，把学习单位锁死在可枚举集合里；tag 列表的规范化仍是
+  宽松的（未知透传，用于路由召回）。
 - **词表带版本号**：``version`` 每次变更必须递增；历史任务已固化的 ``task_type``
-  不追溯改写（规范化只在入库那一刻发生，账本 append-only）。旧 ``Taxonomy`` 实例
-  与新实例互不干扰，各自保留自己的映射快照。
+  不追溯改写（规范化只在入库那一刻发生，账本 append-only）。
 - **人工 pin 优先级最高**：``normalize`` 先查 pin，再查别名表；pin 永远不被别名表
   覆盖，也不会被自动改写。
 """
@@ -68,6 +76,7 @@ class Taxonomy:
         self._by_lower: dict[str, Term] = {}  # lower(id) -> Term
         self._index: dict[str, str] = {}  # lower(别名或标准词) -> 标准词 id
         self._pins: dict[str, str] = {}  # lower(输入) -> 标准词 id
+        self._pins_raw: dict[str, str] = {}  # 原始输入 -> 标准词 id（用于展示/复制）
 
         for raw in terms:
             term = raw if isinstance(raw, Term) else _coerce(raw)
@@ -89,12 +98,17 @@ class Taxonomy:
                     f"pin 目标 {canonical!r} 不是词表里的标准词（已登记：{list(self._terms)}）"
                 )
             self._pins[alias.strip().lower()] = target
+            self._pins_raw[alias.strip()] = target
 
     # ---------------------------------------------------------------- 装载
 
     @classmethod
-    def load(cls, path: Path | str) -> Taxonomy:
-        """从 ``taxonomy.yaml`` 装载。文件缺失或损坏都抛 :class:`TaxonomyError`。"""
+    def load(cls, path: Path | str, env_tags: Iterable[Any] | None = None) -> Taxonomy:
+        """从 ``taxonomy.yaml`` 装载。文件缺失或损坏都抛 :class:`TaxonomyError`。
+
+        传入 ``env_tags`` 时，装载后调用 :meth:`with_environment_tags` 把环境实际
+        声明的 tag 自动登记为标准词——这样"新增业务域只需写 env YAML"。
+        """
         path = Path(path)
         if not path.exists():
             raise TaxonomyError(f"词表文件不存在：{path}")
@@ -104,11 +118,14 @@ class Taxonomy:
             raise TaxonomyError(f"词表文件解析失败：{path}：{exc}") from exc
         if not isinstance(raw, dict):
             raise TaxonomyError(f"词表文件顶层必须是映射：{path}")
-        return cls(
+        tax = cls(
             terms=raw.get("terms") or [],
             version=raw.get("version", "0"),
             pins=raw.get("pins") or {},
         )
+        if env_tags is not None:
+            tax = tax.with_environment_tags(env_tags)
+        return tax
 
     @classmethod
     def empty(cls) -> Taxonomy:
@@ -154,6 +171,52 @@ class Taxonomy:
                 out.append(canonical)
         return out
 
+    def normalize_type(self, task_type: str | None) -> str | None:
+        """严格规范化显式 ``task_type``。
+
+        ``None`` / 空串 → ``None``（由 tags[0] 兜底）。未知取值抛
+        :class:`TaxonomyError`——显式 ``task_type`` 是账本的学习单位，不允许碎片词
+        混进来。标准词、别名、pin 都能解析到标准词。
+        """
+        if task_type is None or not str(task_type).strip():
+            return None
+        canonical = self.normalize(str(task_type))
+        if not self.is_canonical(canonical):
+            raise TaxonomyError(f"未知 task_type {task_type!r}，不在受控词表或环境 tag 里")
+        return canonical
+
+    def with_environment_tags(self, env_tags: Iterable[Any]) -> Taxonomy:
+        """返回一个补充了环境实际声明 tag 的新词表（不修改原实例；无新增时返回原实例）。
+
+        ``env_tags`` 是任意带 ``domain``（或 ``owner``）与 ``tags`` 属性的对象
+        （如 :class:`~capgate.models.EnvManifest`），或 ``(owner, tags)`` 二元组。
+        凡是尚未登记为标准词 / 别名 / pin 的环境 tag，会被自动登记为新标准词
+        （owner 取该环境 domain，无别名）。已登记的标准词、别名、pin 保持优先，
+        不会被环境 tag 覆盖。
+
+        这样"新增业务域"只需写 env YAML：集成代码在装载词表时把 registry 的环境
+        tag 传进来，新环境的 tag 就自动成为可路由、可枚举的标准词。
+        """
+        extra: list[Term] = []
+        known: set[str] = {t.id.lower() for t in self._terms.values()}
+        for owner, tags in _iter_env_tags(env_tags):
+            for tag in tags:
+                t = str(tag).strip()
+                if not t:
+                    continue
+                key = t.lower()
+                if key in self._index or key in self._pins or key in known:
+                    continue
+                extra.append(Term(id=t, owner=owner))
+                known.add(key)
+        if not extra:
+            return self
+        return Taxonomy(
+            terms=[*self._terms.values(), *extra],
+            version=self.version,
+            pins=self.pins,
+        )
+
     # ---------------------------------------------------------------- 查询
 
     def task_types(self) -> list[str]:
@@ -185,19 +248,24 @@ class Taxonomy:
 
     @property
     def pins(self) -> dict[str, str]:
-        """当前 pin 映射的副本（未 lowercase 的原始键值）。"""
-        return dict(self._pins)
+        """当前 pin 映射的副本（保留原始键的大小写）。"""
+        return dict(self._pins_raw)
 
     def pin(self, alias: str, canonical: str) -> None:
         """人工钉死一个映射，优先级高于别名表。目标必须是标准词。"""
         target = self._resolve_id(canonical)
         if target is None:
             raise TaxonomyError(f"pin 目标 {canonical!r} 不是词表里的标准词")
-        self._pins[alias.strip().lower()] = target
+        key = alias.strip().lower()
+        self._pins[key] = target
+        self._pins_raw[alias.strip()] = target
 
     def unpin(self, alias: str) -> None:
         """取消某个人工 pin。"""
-        self._pins.pop(alias.strip().lower(), None)
+        key = alias.strip().lower()
+        self._pins.pop(key, None)
+        for raw in [k for k in self._pins_raw if k.lower() == key]:
+            self._pins_raw.pop(raw, None)
 
     # ---------------------------------------------------------------- 内部
 
@@ -222,6 +290,21 @@ def _coerce(raw: dict[str, Any]) -> Term:
         desc=str(raw.get("desc") or ""),
         owner=str(raw.get("owner") or ""),
     )
+
+
+def _iter_env_tags(env_tags: Iterable[Any]) -> Iterable[tuple[str, Iterable[str]]]:
+    """把 env_tags 归一成 ``(owner, tags)`` 序列。
+
+    支持两种形态：带 ``domain`` / ``owner`` 与 ``tags`` 属性的对象（如
+    EnvManifest），或 ``(owner, tags)`` 二元组。
+    """
+    for item in env_tags:
+        if isinstance(item, tuple) and len(item) == 2 and not isinstance(item[1], str):
+            owner, tags = item
+        else:
+            owner = getattr(item, "domain", None) or getattr(item, "owner", None) or ""
+            tags = getattr(item, "tags", None) or []
+        yield str(owner), tags
 
 
 # ---------------------------------------------------------------- env 重叠提示

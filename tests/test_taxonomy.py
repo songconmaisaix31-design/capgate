@@ -68,14 +68,83 @@ def test_task_types_are_finite_and_enumerable(tax):
     assert all(isinstance(t, str) for t in tax.task_types())
 
 
-def test_every_registered_env_tag_is_covered(tax, repo_root):
-    """词表必须覆盖所有 env 当前声明的 tag，否则路由会悄悄漏掉。"""
+def test_real_env_tags_all_known_after_augment(tax, repo_root):
+    """真实环境清单的所有 tag，在传给 with_environment_tags 后都应被识别。"""
     from capgate.envs import EnvRegistry
 
     registry = EnvRegistry(repo_root / "envs").load()
+    augmented = tax.with_environment_tags(registry.all())
     for env in registry.all():
         for tag in env.tags:
-            assert tax.is_known(tag), f"env {env.id} 的 tag {tag!r} 不在词表里"
+            assert augmented.is_known(tag), f"env {env.id} 的 tag {tag!r} 未被登记"
+
+
+def test_load_accepts_env_tags(repo_root, tmp_path):
+    """入口形态二：Taxonomy.load(..., env_tags=...) 一步完成装载 + 自动登记。"""
+    new_env = tmp_path / "new-domain.yaml"
+    new_env.write_text(
+        "id: new-crawler\ndomain: 新采集\ntags: [新爬取]\nprior: 1.0\n",
+        encoding="utf-8",
+    )
+    from capgate.envs import EnvRegistry
+
+    registry = EnvRegistry(tmp_path).load()
+    tax = Taxonomy.load(repo_root / "taxonomy.yaml", env_tags=registry.all())
+    assert tax.normalize("新爬取") == "新爬取"
+    assert tax.get("新爬取") is not None
+    assert tax.get("新爬取").owner == "新采集"
+
+
+def test_new_env_yaml_only_is_auto_registered(repo_root, tmp_path):
+    """新增业务域只写 env YAML：环境的新 tag 自动成为标准词，无需改根词表。"""
+    new_env = tmp_path / "new-domain.yaml"
+    new_env.write_text(
+        "id: new-crawler\n"
+        "domain: 新采集\n"
+        "tags: [新爬取, 抓取]\n"  # "抓取" 是已有别名 → 归并到"爬虫"；"新爬取" 自动登记
+        "prior: 1.0\n",
+        encoding="utf-8",
+    )
+    from capgate.envs import EnvRegistry
+
+    registry = EnvRegistry(tmp_path).load()
+    augmented = Taxonomy.load(repo_root / "taxonomy.yaml").with_environment_tags(registry.all())
+
+    assert augmented.normalize("新爬取") == "新爬取"  # 环境 tag 自动成为标准词
+    assert augmented.is_canonical("新爬取")
+    assert augmented.get("新爬取").owner == "新采集"  # owner 来自 domain
+    assert augmented.normalize("抓取") == "爬虫"  # 已有别名仍优先，不被环境 tag 覆盖
+
+
+def test_environment_tags_do_not_override_registered(tax):
+    """已登记的标准词 / 别名 / pin 保持优先，环境 tag 不会另起标准词。"""
+    tax.pin("采集", "余额")
+    augmented = tax.with_environment_tags([("新采集", ["爬虫", "抓取", "采集"])])
+    assert augmented.normalize("爬虫") == "爬虫"  # 标准词优先
+    assert augmented.normalize("抓取") == "爬虫"  # 别名优先
+    assert augmented.normalize("采集") == "余额"  # pin 优先
+    assert "爬虫" not in {t.id for t in augmented.terms() if t.owner == "新采集"}
+
+
+def test_with_environment_tags_is_non_mutating(tax):
+    original_types = tax.task_types()
+    augmented = tax.with_environment_tags([("新域", ["新词"])])
+    assert tax.task_types() == original_types  # 原实例不变
+    assert "新词" in augmented.task_types()
+    assert "新词" not in tax.task_types()
+
+
+def test_normalize_type_rejects_unknown(tax):
+    with pytest.raises(TaxonomyError):
+        tax.normalize_type("不存在的类型")
+
+
+def test_normalize_type_accepts_known_alias_and_pin(tax):
+    assert tax.normalize_type("爬虫") == "爬虫"  # 标准词
+    assert tax.normalize_type("抓取") == "爬虫"  # 别名解析到标准词
+    assert tax.normalize_type(None) is None  # 空 → 交给 tags[0]
+    tax.pin("采集", "余额")
+    assert tax.normalize_type("采集") == "余额"  # pin 也生效
 
 
 def test_term_metadata_is_exposed(tax):

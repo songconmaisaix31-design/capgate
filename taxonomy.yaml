@@ -9,10 +9,16 @@
 #   desc    一句话说明这条词指什么任务
 #   owner   负责这个业务域的一方（对应 env 的 domain）
 #
+# 分工：
+#   本文件只负责「跨环境共享的公共别名 + 版本号」，不要求穷举每个环境自己声明的
+#   tag。新增业务域只需写 env YAML，环境 tag 会被集成代码自动登记为标准词
+#   （Taxonomy.with_environment_tags / load(..., env_tags=...)）。
+#
 # 规则：
 #   1. 新增或删改 terms / pins 后必须递增 version；
 #   2. 历史任务已固化的 task_type 不会被追溯改写（账本 append-only，规范化只在入库那一刻发生）；
-#   3. aliases 不能跨 term 冲突；冲突在加载时报错而不是静默归并。
+#   3. aliases 不能跨 term 冲突；冲突在加载时报错而不是静默归并；
+#   4. 已登记的标准词 / 别名 / pin 优先于环境 tag 的自动登记，环境 tag 不会覆盖归并。
 
 version: 1
 
