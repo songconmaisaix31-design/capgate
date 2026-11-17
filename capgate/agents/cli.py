@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,7 @@ class CLIAdapter:
         if not command:
             raise AgentError("cli adapter 需要 config.command")
         argv = shlex.split(command) if isinstance(command, str) else list(command)
+        argv = _resolve_argv(argv)
         timeout = float(self.config.get("timeout_s", 300))
         prompt = PROMPT.format(
             goal=ctx.task.goal,
@@ -90,6 +93,21 @@ class CLIAdapter:
             text=str(data.get("summary", "")),
             trace=[{"adapter": "cli", "argv": argv}],
         )
+
+
+def _resolve_argv(argv: list[str]) -> list[str]:
+    """把裸命令名解析成真实可执行文件。
+
+    Windows 上 npm / pip 安装的 CLI 通常是 ``codex.cmd`` 这类批处理垫片，
+    ``create_subprocess_exec`` 不会按 PATHEXT 补全，直接调用会报 WinError 2。
+    这里统一解析：找到真实路径，遇到 .cmd/.bat 就用 cmd.exe 起。
+    """
+    if not argv:
+        return argv
+    exe = shutil.which(argv[0]) or argv[0]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/c", exe, *argv[1:]]
+    return [exe, *argv[1:]]
 
 
 def _parse(raw: str) -> dict[str, Any]:

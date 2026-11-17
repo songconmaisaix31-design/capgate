@@ -210,6 +210,7 @@ def solve(
     hint: list[str] = typer.Option([], "--hint", help="可重复：指定 env"),
     root: str = typer.Option(None, "--root"),
     strategy: str = typer.Option(None, "--strategy"),
+    budget_s: int = typer.Option(300, "--budget-s", help="单任务预算（秒）"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """提交一个任务并打印决策链。"""
@@ -221,7 +222,13 @@ def solve(
 
     async def main() -> int:
         try:
-            spec = TaskSpec(goal=goal, tags=list(tag), inputs=inputs, hint_envs=list(hint))
+            spec = TaskSpec(
+                goal=goal,
+                tags=list(tag),
+                inputs=inputs,
+                hint_envs=list(hint),
+                budget_s=budget_s,
+            )
             result = await system.orchestrator.run(spec)
             if as_json:
                 emit_json(json.loads(result.model_dump_json()))

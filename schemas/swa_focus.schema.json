@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "swa_focus",
+  "type": "object",
+  "description": "SWA 注意力状态的原样返回。结构由 astrocyte-mcp 决定，这里只约束顶层形状。",
+  "properties": {
+    "topics": { "type": "array" }
+  }
+}

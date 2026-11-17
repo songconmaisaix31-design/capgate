@@ -1,0 +1,24 @@
+id: swa-attention
+domain: 判断上下文
+tags: [注意力, 判断, 上下文, 焦点]
+prior: 2.5
+capabilities:
+  - id: mcp-swa
+    kind: mcp
+    version: ">=0.1,<0.2"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-swa, tool: astrocyte.get_attention_state, args: {}, as: state }
+    - emit:
+        name: swa_focus
+        body: "{{ state }}"
+artifacts:
+  produces: [swa_focus]
+resources:
+  warm: true
+  ttl_s: 1800
+  max_parallel: 2
+notes: 只读 SWA 的注意力状态。写入类工具（report_event / veto）留在白名单外。

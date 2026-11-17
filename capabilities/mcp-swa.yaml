@@ -1,0 +1,27 @@
+id: mcp-swa
+kind: mcp
+title: SWA / Astrocyte 认知工具（注意力状态、焦点解释、经验、事件、否决）
+versions:
+  - version: "0.1.0"
+    transport: stdio
+    command: "${CAPGATE_SWA_EXE:C:/Users/DW/orca/Astrocyte/dist/astrocyte-mcp.exe}"
+    args:
+      - "-data-dir"
+      - "${CAPGATE_SWA_STATE:C:/Users/DW/repos/capgate/var/swa}"
+      - "-project"
+      - "capgate"
+      - "-session"
+      - "${CAPGATE_SWA_SESSION:capgate-gateway}"
+      - "-principal-id"
+      - "capgate-gateway"
+      - "-principal-kind"
+      - "agent"
+      - "-signal-strength"
+      - "1"
+    # 只放行三条只读工具。report_event / veto 需要产品尚未确认的参数，
+    # 也意味着写入真实状态库，不放进自动链路。
+    tools:
+      - astrocyte.get_attention_state
+      - astrocyte.explain_focus
+      - astrocyte.get_experiences
+    startup_timeout: 60
