@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "patch",
+  "type": "object",
+  "required": ["path", "wrote", "diff"],
+  "properties": {
+    "path": { "type": "string" },
+    "wrote": { "type": "boolean" },
+    "changed": { "type": "boolean" },
+    "diff": { "type": "string" },
+    "old_sha256": { "type": "string" },
+    "new_sha256": { "type": "string" },
+    "allow_write": { "type": "boolean" }
+  }
+}

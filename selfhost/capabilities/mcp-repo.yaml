@@ -6,5 +6,5 @@ versions:
     transport: stdio
     command: python
     args: ["-m", "selfhost.mcp_repo"]
-    tools: [run_lint, run_tests, list_issues, repo_status]
+    tools: [run_lint, run_tests, list_issues, repo_status, run_readme_check, write_file, apply_patch]
     startup_timeout: 60

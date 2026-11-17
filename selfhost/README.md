@@ -7,11 +7,14 @@ quality gates as ordinary gateway tasks.
 
 ```
 selfhost/
-  capabilities/mcp-repo.yaml   仓库操作 MCP（lint / 测试 / issue / 状态）
+  capabilities/mcp-repo.yaml   仓库操作 MCP（lint / 测试 / issue / 状态 / 文档 / 受限写入）
   envs/repo-lint.yaml          静态检查 env
   envs/repo-test.yaml          回归测试 env
   envs/issue-triage.yaml       开盘梳理 env
+  envs/repo-docs.yaml          文档校验 env（issue #013）
+  envs/repo-fix.yaml           受限写入 env（issue #014，无任务卡，手动触发）
   tasks/T0*.md                 任务卡（front-matter: id / type / tags / goal）
+  schemas/*.schema.json        产物契约（lint / test / triage / readme_check / patch）
   mcp_repo/__main__.py         那个 MCP 的实现
   loop.py                      驱动：读任务卡 → 交给网关 → 打印决策链
   var/                         自己的账本与产物（gitignored）
@@ -22,7 +25,8 @@ selfhost/
 ```bash
 python -m selfhost.loop --list        # 看有哪些任务
 python -m selfhost.loop --only T03    # 只跑一条（开盘梳理，约 0.2s）
-python -m selfhost.loop               # 全跑（约 20s，含一次完整测试）
+python -m selfhost.loop --only T04    # 只跑文档校验（含 demo.svg 最新性，约 16s）
+python -m selfhost.loop               # 全跑（约 40s，含一次完整测试 + 文档校验）
 ```
 
 退出码：全绿才是 0。可以直接当 CI 门禁。
@@ -32,12 +36,27 @@ python -m selfhost.loop               # 全跑（约 20s，含一次完整测试
 一次 `python -m selfhost.loop` 走的是**和线上任务完全相同**的路径：
 
 1. 任务卡 → `TaskSpec`（tags 决定路由）
-2. 第一层路由按 tag 召回 env（`repo-lint` / `repo-test` / `issue-triage`）
-3. supervisor 拉起 `mcp-repo` 这个 stdio MCP，调 `run_lint` / `run_tests` / `list_issues`
+2. 第一层路由按 tag 召回 env（`repo-lint` / `repo-test` / `issue-triage` / `repo-docs`）
+3. supervisor 拉起 `mcp-repo` 这个 stdio MCP，调 `run_lint` / `run_tests` / `list_issues` / `run_readme_check`
 4. 产物按 schema 校验后落盘，决策链写进 `selfhost/var/capgate.db`
 5. `capgate chain <task_id>` 能复盘每一步为什么这么走
 
 也就是说：**网关调度自己，账本记录自己，产物校验自己。** 没有为自举写任何特例代码。
+
+## 受限写入（issue #014）
+
+`mcp-repo` 除了只读工具，还有 `write_file` 与 `apply_patch`，让网关能"改自己的代码"。
+因为风险高，规矩写得比普通工具严：
+
+- **默认 dry-run**：不传 `allow_write=true` 绝不落盘，只产出统一 diff；
+- **路径白名单**：只许仓库内的 `capgate/ tests/ docs/ envs/ capabilities/`，
+  `../`、绝对路径、`selfhost/`、`README.md` 一律拒绝；
+- **可审可回滚**：每次写入产出 `patch` 产物（统一 diff + 新旧 sha256），进账本，
+  `capgate chain <task_id>` 能追到"改了哪个文件、为什么"。
+
+**谁 review、怎么回滚**：`repo-fix` 没有任务卡，不会进默认循环，只能人工显式触发；
+它的 `patch` 产物是统一 diff，`git apply -R` 就是回滚；review 走正常 PR 流程——
+网关产出 diff，人看 diff，人合 PR。没有这两条，它就是个会自动搞坏仓库的脚本。
 
 ## 一个踩过的坑（值得记住）
 

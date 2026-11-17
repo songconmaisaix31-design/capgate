@@ -1,0 +1,28 @@
+id: repo-fix
+domain: 自举构建
+tags: [修复, 写入, write, fix, 改代码]
+prior: 1.0
+capabilities:
+  - id: mcp-repo
+    kind: mcp
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - capability: mcp-repo
+      tool: write_file
+      args:
+        path: "{{ input.path }}"
+        content: "{{ input.content }}"
+        allow_write: "{{ input.allow_write }}"
+      as: patch
+    - emit:
+        name: patch
+        body: "{{ patch }}"
+artifacts:
+  produces: [patch]
+resources:
+  warm: false
+notes: 受限写入（issue #014）。默认 dry-run，输入里 allow_write=true 才落盘；路径只许仓库内白名单目录。没有任务卡，需显式给 path/content/allow_write 输入。
