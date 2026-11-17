@@ -1,0 +1,23 @@
+id: doc-qa-model
+domain: 模型知识问答
+tags: [模型知识问答]
+prior: 0.1
+capabilities:
+  - id: mcp-rag
+    kind: rag
+    version: ">=0.1,<0.2"
+agent:
+  adapter: openai
+  models: [deepseek-flash]
+  config:
+    explicit_routing: true
+    max_turns: 4
+    max_tokens: 1024
+    reasoning_effort: none
+    instructions: >-
+      对任务中的问题调用 mcp_rag__search，查询本次授权的文档。
+      model_doc_answer 产物包含 answer 字符串和 sources 字符串数组，
+      sources 只列 MCP 实际返回并支持答案的相对文档路径。
+artifacts:
+  produces: [model_doc_answer]
+notes: 知识问答会将查询和相关文档片段发给配置的模型端点。请使用授权的语料。
