@@ -13,6 +13,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from capgate.agents.base import AgentError
+from capgate.agents.cli import _codex_patch, _codex_source_files
+
 PUBLIC_REPO = "https://github.com/songconmaisaix31-design/astrocyte-s3-public-stats"
 PUBLIC_REVISION = "dbce190be32f52eb93a6fd3909fe4d05213c9ba7"
 
@@ -25,13 +28,21 @@ pytestmark = [
 ]
 
 
-def test_codex_public_task_through_http(repo_root: Path, tmp_path: Path) -> None:
+@pytest.fixture(scope="module")
+def public_source() -> tuple[Path, str]:
     public_repo = Path(os.environ["CAPGATE_CODEX_PUBLIC_REPO"]).resolve()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=public_repo, text=True)
     assert revision.strip() == PUBLIC_REVISION
     source = subprocess.check_output(
-        ["git", "show", f"{PUBLIC_REVISION}:stats.go"], cwd=public_repo, encoding="utf-8"
-    )
+        ["git", "show", f"{PUBLIC_REVISION}:stats.go"], cwd=public_repo
+    ).decode("utf-8")
+    return public_repo, source
+
+
+def test_codex_public_task_through_http(
+    repo_root: Path, tmp_path: Path, public_source: tuple[Path, str]
+) -> None:
+    public_repo, source = public_source
     for directory in ("envs", "capabilities", "schemas"):
         shutil.copytree(repo_root / directory, tmp_path / directory)
 
@@ -47,7 +58,9 @@ def test_codex_public_task_through_http(repo_root: Path, tmp_path: Path) -> None
             env={**os.environ, "PYTHONIOENCODING": "utf-8", "CAPGATE_HOME": str(tmp_path)},
         )
         try:
-            with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=5) as client:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", timeout=5, trust_env=False
+            ) as client:
                 chain = _run_public_task(client, process, source)
                 perf = client.get("/api/stats").raise_for_status().json()["perf"]
         finally:
@@ -57,13 +70,29 @@ def test_codex_public_task_through_http(repo_root: Path, tmp_path: Path) -> None
     artifact = next(
         artifact for artifact in chain["artifacts"] if artifact["name"] == "codex_change"
     )
-    patch = json.loads((tmp_path / "var" / "artifacts" / artifact["path"]).read_bytes())["diff"]
-    assert "Median" in patch
+    payload = json.loads((tmp_path / "var" / "artifacts" / artifact["path"]).read_bytes())
+    patch = payload["diff"]
+    assert "func Median(" in patch and payload["reason"].strip()
+    # 使用 LF 检出，保持应用检查的文件字节与提供给模型的提交正文一致。
+    check_repo = tmp_path / "public-lf"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--no-hardlinks",
+            "-c",
+            "core.autocrlf=false",
+            str(public_repo),
+            str(check_repo),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    assert (check_repo / "stats.go").read_bytes() == source.encode("utf-8")
     subprocess.run(
         ["git", "apply", "--check", "-"],
-        input=patch.rstrip() + "\n",
-        cwd=public_repo,
-        encoding="utf-8",
+        input=patch.encode("utf-8"),
+        cwd=check_repo,
         check=True,
     )
     run = chain["runs"][0]
@@ -96,8 +125,64 @@ def test_codex_public_task_through_http(repo_root: Path, tmp_path: Path) -> None
     with session.open(encoding="utf-8") as lines:
         meta = json.loads(next(lines))
         assert meta["type"] == "session_meta" and meta["payload"]["id"] == thread_id
-        assert any("codex_change" in line and '"role":"assistant"' in line for line in lines)
+        outputs = [
+            content["text"]
+            for line in lines
+            if (event := json.loads(line))["type"] == "response_item"
+            and event["payload"].get("role") == "assistant"
+            for content in event["payload"]["content"]
+            if content.get("type") == "output_text"
+        ]
+    native_result = json.loads(outputs[-1])
+    assert set(native_result) == {"replacements", "reason"}
+    assert [item["path"] for item in native_result["replacements"]] == ["stats.go"]
+    assert native_result["reason"] == payload["reason"]
+    assert not {"command_execution", "file_change", "mcp_tool_call", "web_search"} & {
+        event["payload"].get("item_type") for event in events
+    }
     print(f"thread_id={thread_id} event_ids={[event['id'] for event in chain['events']]}")
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("unknown", "未提供的文件"),
+        ("duplicate", "重复替换"),
+        ("unchanged", "没有修改"),
+        ("crlf", "UTF-8 LF"),
+    ],
+)
+def test_codex_rejects_invalid_replacements(
+    public_source: tuple[Path, str], case: str, message: str
+) -> None:
+    _, source = public_source
+    source_files = _codex_source_files({"stats.go": source})
+    changed = {"path": "stats.go", "text": source + "\n"}
+    replacements = {
+        "unknown": [{**changed, "path": "../stats.go"}],
+        "duplicate": [changed, changed],
+        "unchanged": [{**changed, "text": source}],
+        "crlf": [{**changed, "text": source.replace("\n", "\r\n")}],
+    }
+    output = json.dumps({"replacements": replacements[case], "reason": "为统计包保留原输入。"})
+    with pytest.raises(AgentError, match=message):
+        _codex_patch(output, source_files)
+
+
+def test_codex_rejects_nonrelative_source_path(public_source: tuple[Path, str]) -> None:
+    _, source = public_source
+    with pytest.raises(AgentError, match="规范相对路径"):
+        _codex_source_files({"../stats.go": source})
+
+
+def test_codex_decodes_cli_files_without_duplicate_keys(
+    public_source: tuple[Path, str],
+) -> None:
+    _, source = public_source
+    assert _codex_source_files(json.dumps({"stats.go": source})) == {"stats.go": source}
+    item = f'"stats.go": {json.dumps(source)}'
+    with pytest.raises(AgentError, match="重复字段"):
+        _codex_source_files(f"{{{item}, {item}}}")
 
 
 def _run_public_task(client: httpx.Client, process: subprocess.Popen, source: str) -> dict:
@@ -119,11 +204,13 @@ def _run_public_task(client: httpx.Client, process: subprocess.Popen, source: st
             "goal": (
                 "只根据给出的公开 stats.go 为 Go 包添加 Median 函数。"
                 "保留输入顺序，支持奇偶数和负数，拒绝空值和非有限数。"
-                "避免两个最大有限中间值求平均时溢出。codex_change 产物须包含 diff 和 reason。"
-                "diff 只改 stats.go，必须能用 git apply 应用。"
-                "以标准 JSON 返回完整的结构化结果。"
+                "避免两个最大有限中间值求平均时溢出。只返回 stats.go 完整新文本和修改理由。"
             ),
-            "inputs": {"repo": PUBLIC_REPO, "commit": PUBLIC_REVISION, "stats.go": source},
+            "inputs": {
+                "repo": PUBLIC_REPO,
+                "commit": PUBLIC_REVISION,
+                "files": {"stats.go": source},
+            },
             "tags": ["代码修改"],
             "hint_envs": ["codex-dev"],
         },

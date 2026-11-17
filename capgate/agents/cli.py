@@ -7,7 +7,8 @@ config:
     command: ["codex", "exec", "-"] 或 "bash -lc '...'"
     timeout_s: 300
     cwd: 可选
-    output_mode: stdout_json | file
+    output_mode: stdout_json | file | codex_jsonl
+    codex_text_replacements: true 时，从完整文本替换生成 codex_change
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ import shutil
 import signal
 import tempfile
 from contextlib import suppress
+from difflib import unified_diff
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +39,36 @@ PROMPT = """你是一个被能力网关调用的领域执行器。
 
 要求：只输出一个 JSON 对象 {{"artifacts": {{"<产物名>": <JSON>}}, "summary": "<一句话>"}}，
 不要输出其它内容。"""
+
+CODEX_TEXT_PROMPT = """你是能力网关的代码修改执行器。只使用随任务提供的文件文本。
+
+任务目标：{goal}
+任务类型：{task_type}
+任务输入 JSON：{inputs}
+可用输入产物：{artifacts}
+
+使用任务输入中 files 字段提供的原始路径和文本。只为确有修改的文件返回完整的新文本。
+保留 LF 换行，非空文本以换行结尾。每个文件只出现一次。
+仅输出符合指定结构的 JSON，包含 replacements（每项含 path 和 text）和 reason。
+网关生成统一 diff，请在 text 中返回完整文件。"""
+
+CODEX_TEXT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "replacements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "text": {"type": "string"}},
+                "required": ["path", "text"],
+                "additionalProperties": False,
+            },
+        },
+        "reason": {"type": "string"},
+    },
+    "required": ["replacements", "reason"],
+    "additionalProperties": False,
+}
 
 CODEX_DISABLED_FEATURES = (
     "shell_tool",
@@ -72,16 +105,28 @@ class CLIAdapter:
         argv = _resolve_argv([ctx.model if arg == "{model}" else arg for arg in argv])
         timeout = float(self.config.get("timeout_s", 300))
         output_mode = self.config.get("output_mode", "stdout_json")
-        prompt = PROMPT.format(
+        task_inputs = ctx.task.inputs
+        source_files = None
+        prompt_template = PROMPT
+        text_replacements = self.config.get("codex_text_replacements", False)
+        if not isinstance(text_replacements, bool):
+            raise AgentError("codex_text_replacements 须为布尔值")
+        if text_replacements:
+            if output_mode != "codex_jsonl":
+                raise AgentError("codex_text_replacements 需要 codex_jsonl 输出模式")
+            source_files = _codex_source_files(task_inputs.get("files"))
+            task_inputs = {**task_inputs, "files": source_files}
+            prompt_template = CODEX_TEXT_PROMPT
+        prompt = prompt_template.format(
             goal=ctx.task.goal,
             task_type=ctx.task.task_type,
-            inputs=json.dumps(ctx.task.inputs, ensure_ascii=False, default=str),
+            inputs=json.dumps(task_inputs, ensure_ascii=False, default=str),
             artifacts=json.dumps(ctx.artifacts, ensure_ascii=False),
             produces=ctx.env.artifacts.produces,
         )
 
         if output_mode == "codex_jsonl":
-            return await _run_codex(argv, prompt, ctx, timeout)
+            return await _run_codex(argv, prompt, ctx, timeout, source_files=source_files)
 
         if output_mode == "stdout_json":
             raw = await run_command(argv, prompt, timeout, self.config.get("cwd"))
@@ -152,7 +197,12 @@ async def _run_posix_command(
 
 
 async def _run_codex(
-    argv: list[str], prompt: str, ctx: AgentContext, timeout_s: float
+    argv: list[str],
+    prompt: str,
+    ctx: AgentContext,
+    timeout_s: float,
+    *,
+    source_files: dict[str, str] | None = None,
 ) -> AgentOutput:
     scratch = Path("var") / "cli"
     scratch.mkdir(parents=True, exist_ok=True)
@@ -210,13 +260,19 @@ async def _run_codex(
             "skip_host_skill_discovery",
             *(arg for setting in settings for arg in ("-c", setting)),
             *disabled,
-            "-",
         ]
+        if source_files is not None:
+            schema_path = cwd / "output.json"
+            schema_path.write_text(json.dumps(CODEX_TEXT_SCHEMA), encoding="utf-8")
+            command.extend(("--output-schema", str(schema_path)))
+        command.append("-")
         raw = await run_command(command, prompt, timeout_s, cwd)
-    return _parse_codex_events(raw, ctx)
+    return _parse_codex_events(raw, ctx, source_files=source_files)
 
 
-def _parse_codex_events(raw: str, ctx: AgentContext) -> AgentOutput:
+def _parse_codex_events(
+    raw: str, ctx: AgentContext, *, source_files: dict[str, str] | None = None
+) -> AgentOutput:
     thread_id = ""
     last_message = ""
     usage = None
@@ -231,7 +287,7 @@ def _parse_codex_events(raw: str, ctx: AgentContext) -> AgentOutput:
             payload.update(item_id=item["id"], item_type=item["type"])
         ctx.log(f"codex.{kind}", payload)
         if item is not None:
-            if item["type"] in {"command_execution", "file_change", "mcp_tool_call"}:
+            if item["type"] in {"command_execution", "file_change", "mcp_tool_call", "web_search"}:
                 raise AgentError(f"Codex 产生了受限执行中禁止的事件：{item['type']}")
             if kind == "item.completed" and item["type"] == "agent_message":
                 last_message = item["text"]
@@ -239,13 +295,102 @@ def _parse_codex_events(raw: str, ctx: AgentContext) -> AgentOutput:
             usage = event["usage"]
     if not thread_id or not last_message or usage is None:
         raise AgentError("Codex 缺少会话 ID、最终消息或回合用量")
-    data = _parse(last_message)
+    try:
+        data = (
+            _parse(last_message)
+            if source_files is None
+            else _codex_patch(last_message, source_files)
+        )
+    except AgentError as exc:
+        raise AgentError(str(exc), usage=usage) from exc
     return AgentOutput(
         artifacts=data["artifacts"],
         text=data["summary"],
         trace=[{"adapter": "cli", "controller": "codex", "thread_id": thread_id}],
         usage=usage,
     )
+
+
+def _codex_source_files(files: Any) -> dict[str, str]:
+    if isinstance(files, str):
+        try:
+            files = json.loads(files, object_pairs_hook=_unique_json_object)
+        except json.JSONDecodeError as exc:
+            raise AgentError("Codex 的 inputs.files 须为有效 JSON 对象") from exc
+    if not isinstance(files, dict) or not files:
+        raise AgentError("Codex 文本替换需要 inputs.files 提供非空的路径到原文映射")
+    for path, content in files.items():
+        if (
+            not isinstance(path, str)
+            or re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", path) is None
+            or any(part.casefold() == ".git" or part.endswith(".") for part in path.split("/"))
+        ):
+            raise AgentError(f"Codex 文件路径须为规范相对路径，且仅含英数字和 ._-/: {path!r}")
+        _codex_lf_text(path, content)
+    return files
+
+
+def _codex_lf_text(path: str, content: Any) -> str:
+    if (
+        not isinstance(content, str)
+        or "\r" in content
+        or "\0" in content
+        or (content and not content.endswith("\n"))
+    ):
+        raise AgentError(f"Codex 文件 {path!r} 须为 UTF-8 LF 文本，非空文件以 LF 结尾")
+    try:
+        content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise AgentError(f"Codex 文件 {path!r} 包含无效的 UTF-8 字符") from exc
+    return content
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise AgentError(f"Codex JSON 含重复字段 {key!r}")
+        obj[key] = value
+    return obj
+
+
+def _codex_patch(raw: str, source_files: dict[str, str]) -> dict[str, Any]:
+    try:
+        output = json.loads(raw, object_pairs_hook=_unique_json_object)
+    except json.JSONDecodeError as exc:
+        raise AgentError("Codex 文本替换须为有效 JSON") from exc
+    if not isinstance(output, dict) or set(output) != {"replacements", "reason"}:
+        raise AgentError("Codex 文本替换须包含 replacements 和 reason")
+    reason = output["reason"]
+    if not isinstance(reason, str) or not reason.strip():
+        raise AgentError("Codex 文本替换缺少修改理由")
+    replacements = output["replacements"]
+    if not isinstance(replacements, list) or not replacements:
+        raise AgentError("Codex 未返回任何文件修改")
+    patches: dict[str, str] = {}
+    for replacement in replacements:
+        if not isinstance(replacement, dict) or set(replacement) != {"path", "text"}:
+            raise AgentError("Codex 的每项替换须包含 path 和完整 text")
+        path = replacement["path"]
+        if not isinstance(path, str) or path not in source_files:
+            raise AgentError(f"Codex 返回了任务未提供的文件 {path!r}")
+        if path in patches:
+            raise AgentError(f"Codex 对文件 {path!r} 返回了重复替换")
+        original = source_files[path]
+        updated = _codex_lf_text(path, replacement["text"])
+        if original == updated:
+            raise AgentError(f"Codex 返回的文件 {path!r} 没有修改")
+        # Git 只按 LF 计行。splitlines 会把其他 Unicode 分隔符也算作换行。
+        patches[path] = "".join(
+            unified_diff(
+                StringIO(original).readlines(),
+                StringIO(updated).readlines(),
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+            )
+        )
+    diff = "".join(patches[path] for path in sorted(patches))
+    return {"artifacts": {"codex_change": {"diff": diff, "reason": reason}}, "summary": reason}
 
 
 def _resolve_argv(argv: list[str]) -> list[str]:
