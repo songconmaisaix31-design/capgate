@@ -9,7 +9,8 @@ agent:
   config:
     command: [codex]
     output_mode: codex_jsonl
+    codex_text_replacements: true
     timeout_s: 1200
 artifacts:
   produces: [codex_change]
-notes: Codex 仅使用随任务提供的上下文，输出结构化代码变更建议。
+notes: Codex 使用 inputs.files 中的原文生成完整文本替换，由网关生成统一 diff。
