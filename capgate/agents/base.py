@@ -23,7 +23,9 @@ from ..pool import Pool, Resolved
 
 
 class AgentError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, usage: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage or {}
 
 
 @dataclass
@@ -98,11 +100,9 @@ class ToolBox:
         self.resolved = resolved
         self.instance_id = instance_id
         self.calls: list[ToolCall] = []
+        self._advertised_tools: dict[str, tuple[str, str]] = {}
 
     # ------------------------------------------------------------ 描述
-
-    def _prefix(self, cap_id: str) -> str:
-        return re.sub(r"[^A-Za-z0-9_]", "_", cap_id)
 
     async def _connection(self, res: Resolved):
         from ..mcp.client import MCPConnection
@@ -117,37 +117,50 @@ class ToolBox:
     async def specs(self) -> list[dict[str, Any]]:
         """OpenAI function-calling 兼容的工具描述。"""
         out: list[dict[str, Any]] = []
+        advertised: dict[str, tuple[str, str]] = {}
         for cap_id, res in self.resolved.items():
             if res.version.transport == "python":
-                for tool in self._python_tools(res):
-                    out.append(
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": f"{self._prefix(cap_id)}__{tool}",
-                                "description": f"{res.capability.title or cap_id} / {tool}",
-                                "parameters": {"type": "object", "additionalProperties": True},
-                            },
-                        }
-                    )
-                continue
-            conn = await self._connection(res)
-            for spec in conn.tool_specs():
-                if res.version.tools and spec["name"] not in res.version.tools:
+                specs = [
+                    {
+                        "name": tool,
+                        "description": "",
+                        "input_schema": {"type": "object", "additionalProperties": True},
+                    }
+                    for tool in self._python_tools(res)
+                ]
+            else:
+                conn = await self._connection(res)
+                specs = conn.tool_specs()
+            for spec in specs:
+                tool = spec["name"]
+                if res.version.tools and tool not in res.version.tools:
                     continue
+                name = re.sub(r"[^A-Za-z0-9_]", "_", f"{cap_id}__{tool}")
+                if len(name) > 64:
+                    raise AgentError(f"工具名 {name!r} 超过 API 的 64 字符上限")
+                if name in advertised:
+                    raise AgentError(f"工具名 {name!r} 重复，请检查能力和工具名称")
+                advertised[name] = (cap_id, tool)
                 out.append(
                     {
                         "type": "function",
                         "function": {
-                            "name": f"{self._prefix(cap_id)}__{spec['name']}",
-                            "description": (spec["description"] or f"{cap_id}/{spec['name']}")[
-                                :1024
-                            ],
+                            "name": name,
+                            "description": (
+                                spec["description"] or f"{res.capability.title or cap_id} / {tool}"
+                            )[:1024],
                             "parameters": spec["input_schema"],
                         },
                     }
                 )
+        self._advertised_tools = advertised
         return out
+
+    async def call_advertised(self, name: str, args: dict[str, Any]) -> Any:
+        choice = self._advertised_tools.get(name)
+        if choice is None:
+            raise AgentError(f"模型请求了未公开的工具 {name!r}")
+        return await self.call(*choice, args)
 
     def _python_tools(self, res: Resolved) -> list[str]:
         if res.version.entries:
