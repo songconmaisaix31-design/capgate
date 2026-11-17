@@ -41,8 +41,13 @@ pins:
   更新指定键（先 pin env 再 pin model 两者并存）；
 - `remove_pin(root, task_type, *, key=None)`：解除整类或单个键。
 
-写回采用「只替换 `pins` 节」的方式：`pins` 约定为 `router.yaml` 的**最后一个
-顶层键**，其之前的全部内容（其它字段、注释）原样保留，不依赖任何第三方库。
+读写用 `ruamel.yaml` 的 round-trip 模式：完整载入 → 改 `pins` → 完整保存，
+注释、其它字段、已有 model pin 原样保留，不手写 YAML 解析。写回走「同目录
+临时文件 + 原子替换」，写到一半进程被中断也不会留下半截文件。
+
+> **依赖交接**：`ruamel.yaml`（PyYAML 的 `safe_load/safe_dump` 会丢注释，round-trip
+> 是保留注释的唯一成熟做法）由集成侧统一加入 `pyproject.toml`。本模块不碰依赖
+> 清单；集成前请先 `pip install ruamel.yaml`。
 
 ## 重跑
 

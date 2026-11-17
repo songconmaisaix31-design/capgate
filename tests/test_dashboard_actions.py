@@ -61,6 +61,16 @@ def test_set_pin_preserves_other_fields_and_comments(tmp_path):
     assert "人工 pin" in text
 
 
+def test_set_pin_keeps_fields_after_pins(tmp_path):
+    """round-trip 不应要求 pins 是最后一个键：其后的字段也要原样保留。"""
+    _write(tmp_path, "strategy: thompson\npins: {}\nllm_fallback: false\n# 尾注\n")
+    set_pin(tmp_path, "crawl", env="crawler")
+    text = (tmp_path / "router.yaml").read_text(encoding="utf-8")
+    assert "llm_fallback: false" in text
+    assert "尾注" in text
+    assert load_pins(tmp_path) == {"crawl": {"env": "crawler"}}
+
+
 def test_set_pin_overwrites_existing_env(tmp_path):
     _write(tmp_path)
     set_pin(tmp_path, "crawl", env="crawler")
