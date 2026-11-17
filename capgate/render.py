@@ -139,8 +139,9 @@ def stats_panel(stats: dict[str, Any], perf: list[dict[str, Any]], console: Cons
     console.print(
         Panel(
             f"tasks={stats['tasks']}  ok={stats['tasks_ok']}  runs={stats['runs']}  "
-            f"failed_runs={stats['runs_failed']}  artifacts={stats['artifacts']}  "
-            f"任务成功率={stats['success_rate']:.1%}",
+            f"failed_runs={stats['runs_failed']}  artifacts={stats['artifacts']}\n"
+            f"执行成功率={stats['success_rate']:.1%}（只看运行状态）  "
+            f"人工验收={stats.get('rated', 0)} 条，其中差评 {stats.get('rated_bad', 0)} 条",
             title="账本",
             border_style="cyan",
         )

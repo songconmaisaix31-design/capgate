@@ -193,7 +193,7 @@ async function refresh(){
   try{
     const [tasks,stats]=await Promise.all([j('/api/tasks'),j('/api/stats')]);
     const l=stats.ledger;
-    document.getElementById('stats').textContent=`任务 ${l.tasks} · 成功 ${l.tasks_ok} · 运行 ${l.runs} · 产物 ${l.artifacts}`;
+    document.getElementById('stats').textContent=`任务 ${l.tasks} · 执行成功 ${l.tasks_ok} · 运行 ${l.runs} · 产物 ${l.artifacts} · 人工差评 ${l.rated_bad}/${l.rated}`;
     document.getElementById('list').innerHTML=tasks.map(t=>`
       <div class="task ${t.id===current?'sel':''}" onclick="open_('${t.id}')">
         <div class="goal">${esc(t.goal)}</div>

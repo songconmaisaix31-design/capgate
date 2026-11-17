@@ -337,6 +337,13 @@ class Ledger:
             runs = conn.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"]
             bad_runs = conn.execute("SELECT COUNT(*) c FROM runs WHERE status='failed'").fetchone()["c"]
             arts = conn.execute("SELECT COUNT(*) c FROM artifacts").fetchone()["c"]
+            # 人工验收只取每个任务的最新一条
+            rated = conn.execute(
+                "SELECT COUNT(*) c, SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) bad FROM ("
+                " SELECT o1.task_id, o1.success FROM outcomes o1"
+                " WHERE o1.id = (SELECT MAX(o2.id) FROM outcomes o2 WHERE o2.task_id = o1.task_id)"
+                ")"
+            ).fetchone()
         return {
             "tasks": tasks,
             "tasks_ok": ok,
@@ -344,6 +351,8 @@ class Ledger:
             "runs_failed": bad_runs,
             "artifacts": arts,
             "success_rate": (ok / tasks) if tasks else 0.0,
+            "rated": int(rated["c"] or 0),
+            "rated_bad": int(rated["bad"] or 0),
         }
 
     def chain(self, task_id: str) -> dict[str, Any]:
