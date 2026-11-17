@@ -222,6 +222,20 @@ async def test_stream_demo_records_stream_mode(system):
     assert finishes and all(e["payload"]["mode"] == "stream" for e in finishes)
 
 
+async def test_stream_consumer_artifact_is_not_marked_streamed(system):
+    stream = await demo.run_demo(system, "stream")
+    assert stream.status == "ok", stream.error
+    batch = next(a for a in stream.artifacts if a.name == "crawl_batch")
+    summary = next(a for a in stream.artifacts if a.name == "crawl_summary")
+    assert batch.stream is True, "producer 经 seal 的产物要标 stream"
+    assert batch.producer_run, "流式产物要回填 producer_run"
+    assert summary.stream is False, "consumer 用 emit 的普通整块产物不标 stream"
+    # 运行模式与产物模式分开：consumer 的 run 模式是 stream，产物却不是流式
+    chain = system.ledger.chain(stream.task.id)
+    finishes = {e["env_id"]: e for e in chain["events"] if e["kind"] == "env.finish"}
+    assert finishes["analyst-stream"]["payload"]["mode"] == "stream"
+
+
 async def test_stream_producer_failure_marks_truncated(system):
     from capgate.models import AgentSpec, ArtifactContract, EnvManifest
 
@@ -265,9 +279,13 @@ async def test_stream_producer_failure_marks_truncated(system):
     # producer 失败，但断流状态在持久化与下游都可观察
     report = next(a for a in result.artifacts if a.name == "report")
     assert report.truncated is True, "截断快照要落盘且带 truncated 标记"
+    assert report.producer_run, "截断快照也要回填 producer_run"
     chain = system.ledger.chain(result.task.id)
     collects = [e for e in chain["events"] if e["kind"] == "agent.stream_collect"]
     assert any(e["payload"].get("truncated") for e in collects), "下游要观察到断流，而非挂死"
+    # consumer 收到 truncated 却缺 extra，诊断必须点出 truncated
+    consumer_run = next(r for r in chain["runs"] if r["env_id"] == "sc")
+    assert "truncated" in (consumer_run["error"] or ""), "缺 key 时错误要明确出现 truncated"
 
 
 # ---------------------------------------------------------------- #7 原子写与并发
@@ -279,6 +297,20 @@ def test_put_is_atomic_no_temp_leftover(store):
     assert len(files) == 1
     assert not any(f.name.startswith(".") for f in files), "不能留下半截临时文件"
     assert store.load(art) == {"ok": True}
+
+
+def test_put_uses_full_sha256_and_repeated_write_is_safe(store):
+    art = store.put("task_1", "free_form", {"x": 1})
+    assert len(art.sha256) == 64
+    assert art.path.endswith(f"-{art.sha256}.json"), "文件名用完整 SHA-256，不是八位摘要"
+
+    # 重复写同一内容：内容寻址去重，硬链接安装不报错，仍只有一份文件
+    art2 = store.put("task_1", "free_form", {"x": 1})
+    assert art2.sha256 == art.sha256 and art2.path == art.path
+    files = list((store.root / "task_1").iterdir())
+    assert len(files) == 1
+    assert not any(f.name.startswith(".") for f in files)
+    assert store.load(art2) == {"x": 1}
 
 
 def test_concurrent_put_same_content_stays_valid(store):
@@ -295,7 +327,7 @@ def test_concurrent_put_same_content_stays_valid(store):
         t.join()
 
     files = list((store.root / "task_1").iterdir())
-    assert len(files) == 1, "相同内容 → 相同 sha8 → 同一文件，不该堆积"
+    assert len(files) == 1, "相同内容 → 相同完整 sha256 → 同一文件，不该堆积"
     assert json.loads(files[0].read_text(encoding="utf-8")) == payload
     assert not any(f.name.startswith(".") for f in files)
 

@@ -76,19 +76,20 @@ recipe 里两个新步骤：producer 用 `stream_emit`（写一条 chunk），co
 
 `capgate demo -s stream` 跑流式链路；`demo.run_stream_comparison` 用同一个 fixture 对比
 整块与流式的结果和耗时（结果一致，`fetched_at` 除外）。本机（Windows，Python 3.13，
-暖 MCP）实测 5 轮：
+暖 MCP）六对交替、固定样本，取中位数：
 
-| 模式 | 平均时延 |
+| 模式 | 中位时延 |
 |---|---|
-| 整块 `crawler → analyst` | ~46 ms |
-| 流式 `crawler-stream → analyst-stream` | ~62 ms |
+| 整块 `crawler → analyst` | ~44 ms |
+| 流式 `crawler-stream → analyst-stream` | ~64 ms |
 
 **结论**：这个微工作负载（3 次 MCP 往返 + 进程内汇总）下流式**没有更快**——重叠省下的
 只有一次 `extract_text` 往返（~5ms），而增量通道的协作开销（事件通知 + 增量文件读写 +
 并发调度，~17ms）更大。优化前 per-chunk 反复 `open`/`close` 文件句柄时是 ~96ms，改成
-持久 fd 后降到 ~62ms，已把关键路径上最大的开销修掉。流式的价值在"边爬边喂"的大负载
-（每 chunk 本身耗时可观）才体现；对 45ms 级的小任务，整块更省。此结果已如实记录，
-`before_seal=True` 的证据说明**增量交付机制本身是正确**的。
+持久 fd 后降到 ~64ms，已把关键路径上最大的开销修掉。流式的价值在"边爬边喂"的大负载
+（每 chunk 本身耗时可观）才体现；对 44ms 级的小任务，整块更省。此结果已如实记录，
+`before_seal=True` 的证据说明**增量交付机制本身是正确**的（下游在快照前已消费，
+汇总与整块相等）。未用人造延时、未调整任务隐藏开销，也不宣称时延已通过。
 
 ## 并发模型：本机单写者（issue #7）
 

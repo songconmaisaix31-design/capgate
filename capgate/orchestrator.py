@@ -330,7 +330,18 @@ class Orchestrator:
                     stream=consumer_sessions[consumer.id],
                 )
             )
-        runs = await asyncio.gather(*coros, return_exceptions=False)
+        try:
+            runs = await asyncio.gather(*coros, return_exceptions=False)
+        finally:
+            # 无论成功、异常还是父任务取消，都要关掉已打开的通道、删掉临时 .stream；
+            # 取消/异常之后不再继续写文件。
+            for session in consumer_sessions.values():
+                for reader in session.readers.values():
+                    reader.close()
+            for writer in writers.values():
+                writer.close()
+                with contextlib.suppress(OSError):
+                    writer.stream_path.unlink(missing_ok=True)
 
         # 引用计数补记：流式产物的 sha 要到 producer seal 后才已知，此时再登记
         # consumer 的消费，喂给 GC 判断"被引用则不能删"。
@@ -341,15 +352,6 @@ class Orchestrator:
                     self.ledger.add_artifact_ref(
                         task.id, payload_meta[name].sha256, consumer.id, run.run_id
                     )
-
-        # 收尾：关掉流式文件句柄，删掉临时的 .stream（最终快照是 .json）。
-        for session in consumer_sessions.values():
-            for reader in session.readers.values():
-                reader.close()
-        for writer in writers.values():
-            writer.close()
-            with contextlib.suppress(OSError):
-                writer.stream_path.unlink(missing_ok=True)
         return list(runs)
 
     async def _run_wave(
@@ -392,6 +394,10 @@ class Orchestrator:
         }
 
         run_id = self.ledger.start_run(task.id, env, env.agent.adapter, model)
+        # 流式 writer 在编排时还没 run_id，这里回填，seal 时 producer_run 才有值。
+        if stream is not None:
+            for writer in stream.writers.values():
+                writer.run_id = run_id
         # 引用计数：把这次 env 消费了哪些产物登记下来，供 GC 判断"被引用则不能删"。
         for ref in env.artifacts.consumes:
             name = ArtifactContract.parse(ref)[0]
@@ -465,8 +471,11 @@ class Orchestrator:
         else:
             emitted = set(execution.output.artifacts)
             for name, payload in execution.output.artifacts.items():
+                # 普通整块产物（含流式 consumer 用 emit 产出的下游产物）不标 stream；
+                # 只有流式 producer 经 seal 的产物才是 stream=True。运行模式与产物
+                # 模式分开记录。
                 artifact = self.store.put(
-                    task.id, name, payload, env_id=env.id, run_id=run_id, stream=env.stream
+                    task.id, name, payload, env_id=env.id, run_id=run_id, stream=False
                 )
                 self.ledger.add_artifact(task.id, artifact)
                 artifacts.append(artifact)
