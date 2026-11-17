@@ -1,0 +1,10 @@
+{
+  "name": "capgate-agent-autoloop-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "1.0.7"
+  }
+}

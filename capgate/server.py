@@ -7,11 +7,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +40,7 @@ class TaskIn(BaseModel):
     hint_envs: list[str] = Field(default_factory=list)
     type: str | None = None
     allow_parallel: bool = True
+    budget_s: int = Field(default=300, gt=0)
 
 
 class OutcomeIn(BaseModel):
@@ -42,6 +48,45 @@ class OutcomeIn(BaseModel):
     quality: float | None = None
     human_edits: int = 0
     note: str | None = None
+
+
+class RerunReceipt(BaseModel):
+    event: int = Field(gt=0)
+    routed: list[str]
+
+
+async def _request_rerun(task_id: str, request_id: str) -> RerunReceipt:
+    hub = os.environ.get("CAPGATE_AUTOLOOP_URL")
+    key = os.environ.get("CAPGATE_AUTOLOOP_OPERATOR_KEY")
+    if not hub or not key:
+        raise HTTPException(503, "重跑未启用，请设置 agent-autoloop 地址和操作者来源密钥")
+    try:
+        url = httpx.URL(hub)
+    except httpx.InvalidURL as error:
+        raise HTTPException(503, "agent-autoloop 地址无效") from error
+    if (
+        url.scheme not in {"http", "https"}
+        or url.host not in {"127.0.0.1", "::1", "localhost"}
+        or url.userinfo
+    ):
+        raise HTTPException(503, "agent-autoloop 地址须使用本机 HTTP 服务地址")
+
+    encoded = json.dumps([task_id, request_id], separators=(",", ":")).encode()
+    event_id = f"rerun:{hashlib.sha256(encoded).hexdigest()}"
+    event = {"id": event_id, "type": "capgate.rerun", "subject": event_id, "detail": task_id}
+    endpoint = url.copy_with(path="/v1/events", query=None, fragment=None)
+    try:
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
+            response = await client.post(
+                endpoint, json=event, headers={"Authorization": f"Bearer {key}"}
+            )
+            response.raise_for_status()
+            receipt = RerunReceipt.model_validate(response.json())
+    except (httpx.HTTPError, ValueError) as error:
+        raise HTTPException(502, "agent-autoloop 未确认重跑事件，请检查中台与来源密钥") from error
+    if not receipt.routed:
+        raise HTTPException(409, f"agent-autoloop 事件 {receipt.event} 未匹配重跑规则")
+    return receipt
 
 
 def create_app(system: System) -> FastAPI:
@@ -105,16 +150,22 @@ def create_app(system: System) -> FastAPI:
         return chain
 
     @app.post("/api/tasks")
-    async def create_task(body: TaskIn) -> dict[str, Any]:
-        spec = TaskSpec(
-            goal=body.goal,
-            tags=body.tags,
-            inputs=body.inputs,
-            hint_envs=body.hint_envs,
-            type=body.type,
-            allow_parallel=body.allow_parallel,
-        )
-        system.ledger.add_task(spec)
+    async def create_task(
+        body: TaskIn,
+        idempotency_key: Annotated[
+            str | None, Header(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+        ] = None,
+    ) -> dict[str, Any]:
+        spec = TaskSpec(**body.model_dump())
+        if idempotency_key is None:
+            system.ledger.add_task(spec)
+        else:
+            spec.id = f"task_{uuid5(NAMESPACE_URL, f'capgate:tasks:{idempotency_key}').hex}"
+            if not system.ledger.reserve_task(spec):
+                existing = system.ledger.task(spec.id)
+                if existing is None or TaskSpec.model_validate_json(existing["spec"]) != spec:
+                    raise HTTPException(409, "此 Idempotency-Key 已用于另一份任务规格")
+                return {"id": spec.id, "status": existing["status"]}
 
         async def runner() -> None:
             # 失败已经落账；这里只保证后台任务不把异常抛到事件循环外面
@@ -138,5 +189,19 @@ def create_app(system: System) -> FastAPI:
             note=body.note,
         )
         return {"ok": True}
+
+    @app.post("/api/tasks/{task_id}/rerun")
+    async def request_rerun(
+        task_id: str,
+        idempotency_key: Annotated[
+            str | None, Header(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+        ] = None,
+    ) -> RerunReceipt:
+        task = system.ledger.task(task_id)
+        if task is None:
+            raise HTTPException(404, "任务不存在")
+        if task["status"] not in {"ok", "degraded", "failed"}:
+            raise HTTPException(409, "任务尚未结束")
+        return await _request_rerun(task_id, idempotency_key or str(uuid4()))
 
     return app
