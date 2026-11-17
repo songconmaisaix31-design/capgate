@@ -23,6 +23,7 @@
   h2{font-size:13px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.7px;margin:20px 0 8px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:10px}
   .dec .stage{color:var(--acc);font-weight:600}
+  .dec.pin .stage{color:var(--warn)}
   .dec .reason{color:var(--dim);font-size:12px;margin:3px 0 8px}
   .cand{display:grid;grid-template-columns:150px 1fr 90px;gap:10px;align-items:center;font-size:12px;padding:2px 0}
   .bar{height:6px;background:#20293a;border-radius:3px;overflow:hidden}
@@ -37,6 +38,15 @@
   .form{display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
   .form input{flex:1}
   .muted{color:var(--dim)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .actions button.good{border-color:#1f6f33;color:var(--ok)}
+  .actions button.bad{border-color:#7a2622;color:var(--bad)}
+  .actions button.good:hover{background:#12281a}
+  .actions button.bad:hover{background:#2b1512}
+  .note{width:100%;margin-top:8px}
+  .pinrow{display:flex;gap:8px;align-items:center;font-size:12px;margin:2px 0}
+  .pinrow .tag{color:var(--acc)}
+  .pinrow button{font-size:11px;padding:2px 8px}
 </style></head><body>
 <header>
   <h1>capgate</h1><span class="meta">本地能力网关 · 控制面 / 能力池 / 领域环境 / 任务编排</span>
@@ -52,12 +62,24 @@
   <div id="detail"><p class="muted">左侧选一个任务，或提交一个新的。</p></div>
 </main>
 <script>
-let current=null, timer=null;
+let current=null, timer=null, statsCache=null, pins={};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.json()}
+async function j(u,o){
+  const r=await fetch(u,o);
+  if(!r.ok){
+    let msg=String(r.status);
+    try{const b=await r.json();if(b&&b.detail)msg=b.detail;}catch(e){}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+async function refreshPins(){
+  try{const r=await j('/api/pins');pins=(r&&r.pins)?r.pins:r;}catch(e){pins={};}
+}
 async function refresh(){
   try{
     const [tasks,stats]=await Promise.all([j('/api/tasks'),j('/api/stats')]);
+    statsCache=stats;
     const l=stats.ledger;
     document.getElementById('stats').textContent=`任务 ${l.tasks} · 执行成功 ${l.tasks_ok} · 运行 ${l.runs} · 产物 ${l.artifacts} · 人工差评 ${l.rated_bad}/${l.rated}`;
     document.getElementById('list').innerHTML=tasks.map(t=>`
@@ -66,8 +88,28 @@ async function refresh(){
         <div class="sub"><span class="pill ${t.status}">${esc(t.status)}</span>
           <span>${esc(t.task_type)}</span><span>${esc((t.created_at||'').slice(11,19))}</span></div>
       </div>`).join('')||'<p class="muted" style="padding:16px">还没有任务。</p>';
+    await refreshPins();
     if(current) await open_(current,true);
   }catch(e){}
+}
+function domainEnv(c){
+  const d=(c.decisions||[]).find(x=>x.stage==='domain');
+  return d&&d.chosen&&d.chosen.length?d.chosen[0]:null;
+}
+function envPerf(){
+  const m={};
+  for(const p of ((statsCache&&statsCache.perf)||[])){
+    const e=p.env_id||'?';
+    const r=m[e]||(m[e]={n:0,wins:0});
+    r.n+=p.n||0;r.wins+=p.wins||0;
+  }
+  return Object.entries(m).sort((a,b)=>a[0].localeCompare(b[0]));
+}
+function envRate(env){
+  const row=envPerf().find(x=>x[0]===env);
+  if(!row)return null;
+  const {n,wins}=row[1];
+  return {n,wins,rate:n?wins/n:0};
 }
 async function open_(id,quiet){
   current=id;
@@ -82,19 +124,87 @@ async function open_(id,quiet){
         <span class="bar"><i style="width:${Math.min(100,(x.score/max)*100)}%"></i></span>
         <span class="muted">${x.score.toFixed(3)} · n=${x.success+x.fail}</span>
       </div>`).join('');
-    return `<div class="card dec"><div class="stage">${esc(d.stage)} · ${esc(d.strategy)} → ${esc(d.chosen.join(', '))}</div>
+    return `<div class="card dec ${d.strategy==='pin'?'pin':''}"><div class="stage">${esc(d.stage)} · ${esc(d.strategy)} → ${esc(d.chosen.join(', '))}</div>
       <div class="reason">${esc(d.reason)}</div>${rows}</div>`;
   }).join('');
   const runs=(c.runs||[]).map(r=>`<tr><td>${esc(r.env_id)}</td><td>${esc(r.adapter)}</td><td>${esc(r.model)}</td>
     <td class="pill ${r.status}">${esc(r.status)}</td><td>${r.latency_ms}</td></tr>`).join('');
   const arts=(c.artifacts||[]).map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(a.sha256.slice(0,12))}</td>
     <td>${a.bytes}</td><td class="muted">${esc(a.path)}</td></tr>`).join('');
+  const env=domainEnv(c);
+  const perfRows=envPerf().map(([e,r])=>{
+    const rate=r.n?r.wins/r.n:0;
+    return `<tr><td>${esc(e)}${e===env?' <span class="pill">当前</span>':''}</td>
+      <td>${r.wins}/${r.n}</td>
+      <td style="width:180px"><span class="bar"><i style="width:${Math.round(rate*100)}%;background:var(--ok)"></i></span></td>
+      <td class="muted">${Math.round(rate*100)}%</td></tr>`;
+  }).join('');
+  const pinRows=Object.entries(pins).map(([t,v])=>`
+    <div class="pinrow"><span class="tag">${esc(t)}</span>
+      <span class="muted">${esc([v.env&&('env='+v.env),v.model&&('model='+v.model)].filter(Boolean).join(' '))}</span>
+      <button onclick="unpin('${esc(t)}')">解除</button></div>`).join('');
+  const envHint=env?`pin 会把任务类型 <b>${esc(c.task.task_type)}</b> 固定到 env <b>${esc(env)}</b>`:'该任务没有可 pin 的 env';
   document.getElementById('detail').innerHTML=`
     <h2>任务</h2><div class="card"><b>${esc(c.task.goal)}</b><div class="muted">${esc(c.task.id)} · ${esc(c.task.task_type)} · ${esc(c.task.status)}</div></div>
+    <h2>操作</h2><div class="card">
+      <div class="actions">
+        <button class="good" onclick="rate(true)">验收：好</button>
+        <button class="bad" onclick="rate(false)">验收：差</button>
+        <button onclick="pinCurrentEnv()" ${env?'':'disabled'}>pin 当前 env</button>
+        <button onclick="rerunTask()">重跑</button>
+      </div>
+      <input class="note" id="rateNote" placeholder="验收备注（可选）"/>
+      <div class="muted" style="margin-top:6px">${envHint}</div>
+      <div class="muted" id="actionNote" style="margin-top:4px"></div>
+    </div>
     <h2>决策链</h2>${decs||'<p class="muted">暂无</p>'}
     <h2>执行</h2><table><tr><th>env</th><th>adapter</th><th>model</th><th>status</th><th>ms</th></tr>${runs}</table>
+    <h2>环境胜率</h2><table><tr><th>env</th><th>wins/n</th><th>胜率</th><th></th></tr>${perfRows||'<tr><td colspan="4" class="muted">还没有运行样本</td></tr>'}</table>
+    <h2>人工 pin</h2>${pinRows||'<p class="muted">还没有 pin。</p>'}
     <h2>产物</h2><table><tr><th>name</th><th>sha256</th><th>bytes</th><th>path</th></tr>${arts}</table>
     <h2>事件</h2><pre>${esc(JSON.stringify((c.events||[]).map(e=>({kind:e.kind,ts:e.ts.slice(11,23)})),null,1))}</pre>`;
+}
+function setNote(msg){
+  const el=document.getElementById('actionNote');
+  if(el)el.textContent=msg;
+}
+async function rate(good){
+  if(!current)return;
+  const note=document.getElementById('rateNote')?.value?.trim()||undefined;
+  try{
+    await j('/api/tasks/'+current+'/outcome',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({success:good,note})});
+    await refresh();
+    const c=await j('/api/tasks/'+current);
+    const env=domainEnv(c);
+    const r=env?envRate(env):null;
+    const delta=r?`${env} 现在胜率 ${r.wins}/${r.n}（${Math.round(r.rate*100)}%）`:'';
+    setNote(`已验收：${good?'好':'差'}。${delta}`);
+  }catch(e){setNote(`验收失败：${e.message}`);}
+}
+async function pinCurrentEnv(){
+  if(!current)return;
+  const c=await j('/api/tasks/'+current);
+  const env=domainEnv(c);
+  if(!env){setNote('没有可 pin 的 env');return;}
+  try{
+    await j('/api/pins',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:c.task.task_type,env})});
+    await refreshPins();await refresh();
+    setNote(`已 pin：${c.task.task_type} → ${env}`);
+  }catch(e){setNote(`pin 失败：${e.message}`);}
+}
+async function unpin(t){
+  try{
+    await j('/api/pins/'+encodeURIComponent(t),{method:'DELETE'});
+    await refreshPins();await refresh();
+  }catch(e){setNote(`解除失败：${e.message}`);}
+}
+async function rerunTask(){
+  if(!current)return;
+  try{
+    const r=await j('/api/tasks/'+current+'/rerun',{method:'POST'});
+    setNote(`已重跑：新任务 ${r.id}`);
+    await refresh();
+  }catch(e){setNote(`重跑失败：${e.message}`);}
 }
 async function submitTask(){
   const goal=document.getElementById('goal').value.trim();
