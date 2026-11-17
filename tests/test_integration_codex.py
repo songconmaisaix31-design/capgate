@@ -75,22 +75,26 @@ def test_codex_public_task_through_http(
     assert "func Median(" in patch and payload["reason"].strip()
     # 使用 LF 检出，保持应用检查的文件字节与提供给模型的提交正文一致。
     check_repo = tmp_path / "public-lf"
-    subprocess.run(
+    clone = subprocess.run(
         [
             "git",
+            "-c",
+            "core.longpaths=true",
             "clone",
             "--no-hardlinks",
             "-c",
             "core.autocrlf=false",
+            "-c",
+            "core.longpaths=true",
             str(public_repo),
             str(check_repo),
         ],
-        check=True,
         capture_output=True,
     )
+    assert clone.returncode == 0, clone.stderr.decode("utf-8", errors="replace")
     assert (check_repo / "stats.go").read_bytes() == source.encode("utf-8")
     subprocess.run(
-        ["git", "apply", "--check", "-"],
+        ["git", "-c", "core.longpaths=true", "apply", "--check", "-"],
         input=patch.encode("utf-8"),
         cwd=check_repo,
         check=True,
