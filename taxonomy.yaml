@@ -1,0 +1,68 @@
+# 受控词表（issue #9）
+#
+# tag 是路由词表，也是 task_type 的学习单位。"爬虫 / 抓取 / 采集"若被当成三个
+# 不同的词，历史样本就被劈成几份，Thompson 后验永远攒不够。
+#
+# 这里的每条「标准词」有四个字段：
+#   id      标准词本身，也是规范化后的 task_type 取值（可枚举）
+#   aliases 别名：入库前会被归并到 id
+#   desc    一句话说明这条词指什么任务
+#   owner   负责这个业务域的一方（对应 env 的 domain）
+#
+# 规则：
+#   1. 新增或删改 terms / pins 后必须递增 version；
+#   2. 历史任务已固化的 task_type 不会被追溯改写（账本 append-only，规范化只在入库那一刻发生）；
+#   3. aliases 不能跨 term 冲突；冲突在加载时报错而不是静默归并。
+
+version: 1
+
+terms:
+  - id: 爬虫
+    aliases: [抓取, 采集, 爬取]
+    desc: 抓取网页正文、抽取链接与文本
+    owner: 数据采集
+  - id: 汇总
+    aliases: [分析, 报告, 总结]
+    desc: 对采集结果做汇总、统计与报告
+    owner: 内容分析
+  - id: 链上
+    aliases: [区块链, 区块链工具, 能力清单, 链上数据]
+    desc: 查询链上能力清单与区块链工具
+    owner: 链上数据
+  - id: EVM
+    aliases: [evm, 以太坊]
+    desc: 面向 EVM 兼容链的查询
+    owner: 链上数据
+  - id: 地址
+    aliases: [address, 钱包地址, 账户地址]
+    desc: 按地址查询链上数据
+    owner: 链上数据
+  - id: 余额
+    aliases: [balance, 查余额, 账户余额]
+    desc: 查询账户 / 地址余额
+    owner: 链上数据
+  - id: 环境
+    aliases: [工具链, 依赖, 版本, 环境管理, 开发环境]
+    desc: 开发环境的体检与注册表清单
+    owner: 开发环境
+  - id: 文档
+    aliases: [问答, 检索, 知识库]
+    desc: 本地语料检索与问答
+    owner: 知识问答
+  - id: 演示链
+    aliases: [演示余额, 演示, demo]
+    desc: 演示用确定性伪数据，非真实链上查询
+    owner: 演示
+  - id: 代码修改
+    aliases: [修复, 重构, 实现]
+    desc: 由 Codex 驱动的结构化代码变更建议
+    owner: 代码修改
+  - id: 注意力
+    aliases: [判断, 上下文, 焦点]
+    desc: 读取 SWA 注意力状态与判断上下文
+    owner: 判断上下文
+
+# 人工 pin：别名 -> 标准词。优先级高于 terms.aliases，算法不得覆盖。
+# 当词表的自动别名归并归并错了，人工在这里钉死，直到词表下个版本修正。
+# 目标必须是上面某个 term 的 id，否则加载时报错。
+pins: {}
