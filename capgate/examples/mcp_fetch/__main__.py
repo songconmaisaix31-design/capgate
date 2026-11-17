@@ -1,10 +1,7 @@
 """示例 MCP server：抓取 + 抽链接 + 抽正文。
 
-用官方 SDK 的 FastMCP 写，几十行就是一个真 MCP。
+使用官方 MCP Python SDK。
 启动：``python -m capgate.examples.mcp_fetch``（stdio）
-
-约定：工具一律返回 dict —— FastMCP 会把 dict 序列化成单个 JSON 文本块，
-客户端一行 json.loads 就能拿回结构；返回 list 会被拆成多个文本块。
 """
 
 from __future__ import annotations
@@ -15,9 +12,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from mcp.server.fastmcp import FastMCP
+from capgate.mcp.server import create_server
 
-mcp = FastMCP("capgate-fetch")
+mcp = create_server("capgate-fetch")
 
 
 class _Extract(HTMLParser):

@@ -10,9 +10,9 @@ import os
 import re
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from capgate.mcp.server import create_server
 
-mcp = FastMCP("capgate-rag")
+mcp = create_server("capgate-rag")
 
 _CORPUS_ENV = "CAPGATE_CORPUS"
 _DEFAULT = Path(__file__).resolve().parents[3] / "fixtures" / "corpus"

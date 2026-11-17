@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
-from contextlib import AsyncExitStack
-from pathlib import Path
 from typing import Any
 
+from mcp.types import CallToolResult, Tool
+
 from ..models import CapabilityVersion
+from .transport import MCPTransport, open_transport
 
 DEFAULT_TIMEOUT = 60.0
 
@@ -24,40 +23,35 @@ class MCPError(RuntimeError):
     pass
 
 
-def _normalize(result: Any) -> Any:
-    """把 CallToolResult 压成 Python 值：单个文本能 JSON 化就 JSON 化。"""
-    content = getattr(result, "content", None)
-    if not content:
-        return None
+def _normalize(result: CallToolResult) -> Any:
+    # BCA 的 JSON 文本沿用原字段，结构化内容可能额外包一层 result。
+    structured = getattr(result, "structured_content", None)
+    if structured is None:
+        structured = getattr(result, "structuredContent", None)
+    if not result.content:
+        return structured
     texts: list[str] = []
-    extra: list[dict[str, Any]] = []
-    for item in content:
-        text = getattr(item, "text", None)
-        if text is not None:
-            texts.append(text)
+    extra: list[dict[str, str]] = []
+    for item in result.content:
+        if item.type == "text":
+            texts.append(item.text)
         else:
-            extra.append({"type": getattr(item, "type", "unknown")})
-    if len(texts) == 1 and not extra:
-        text = texts[0]
-        try:
-            return json.loads(text)
-        except (TypeError, ValueError):
-            return text
-    if texts and not extra:
-        merged = "\n".join(texts)
-        try:
-            return json.loads(merged)
-        except (TypeError, ValueError):
-            return merged
-    return {"text": "\n".join(texts), "extra": extra}
+            extra.append({"type": item.type})
+    merged = "\n".join(texts)
+    if extra:
+        return {"text": merged, "extra": extra}
+    try:
+        return json.loads(merged)
+    except json.JSONDecodeError:
+        return structured if structured is not None else merged
 
 
 class MCPConnection:
     def __init__(self, spec: CapabilityVersion, label: str = "") -> None:
         self.spec = spec
         self.label = label or spec.version
-        self._session: Any = None
-        self._tools: dict[str, Any] = {}
+        self._session: MCPTransport | None = None
+        self._tools: dict[str, Tool] = {}
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -86,35 +80,9 @@ class MCPConnection:
             raise MCPError(f"MCP 连接失败（{self.label}）：{self._error}") from self._error
 
     async def _host(self) -> None:
-        from mcp.client.stdio import stdio_client
-
-        from mcp import ClientSession, StdioServerParameters
-
         try:
-            async with AsyncExitStack() as stack:
-                if self.spec.transport == "stdio":
-                    params = StdioServerParameters(
-                        command=_command(self.spec.command),
-                        args=list(self.spec.args),
-                        env=_env(self.spec.env),
-                        cwd=self.spec.cwd or None,
-                    )
-                    read, write = await stack.enter_async_context(stdio_client(params))
-                elif self.spec.transport == "http":
-                    from mcp.client.streamable_http import streamablehttp_client
-
-                    if not self.spec.url:
-                        raise MCPError("http transport 缺少 url")
-                    read, write, _ = await stack.enter_async_context(
-                        streamablehttp_client(self.spec.url)
-                    )
-                else:
-                    raise MCPError(f"不支持的 transport：{self.spec.transport}")
-
-                session = await stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-                listed = await session.list_tools()
-                self._tools = {t.name: t for t in listed.tools}
+            async with open_transport(self.spec) as session:
+                self._tools = await self._list_tools(session)
                 self._session = session
                 self._ready.set()
                 await self._stop.wait()
@@ -123,6 +91,20 @@ class MCPConnection:
             self._ready.set()
         finally:
             self._session = None
+
+    async def _list_tools(self, session: MCPTransport) -> dict[str, Tool]:
+        tools = {}
+        seen = set()
+        cursor = None
+        while True:
+            page = await session.list_tools(cursor=cursor)
+            tools.update((tool.name, tool) for tool in page.tools)
+            cursor = getattr(page, "next_cursor", getattr(page, "nextCursor", None))
+            if cursor is None:
+                return tools
+            if cursor in seen:
+                raise MCPError(f"{self.label} 返回了重复的工具分页游标")
+            seen.add(cursor)
 
     async def close(self) -> None:
         self._stop.set()
@@ -137,17 +119,18 @@ class MCPConnection:
     # ---------------------------------------------------------------- 调用
 
     @property
-    def tools(self) -> dict[str, Any]:
+    def tools(self) -> dict[str, Tool]:
         return self._tools
 
     def tool_specs(self) -> list[dict[str, Any]]:
         out = []
         for name, tool in self._tools.items():
+            schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None)
             out.append(
                 {
                     "name": name,
-                    "description": getattr(tool, "description", "") or "",
-                    "input_schema": getattr(tool, "inputSchema", None) or {"type": "object"},
+                    "description": tool.description or "",
+                    "input_schema": schema or {"type": "object"},
                 }
             )
         return out
@@ -163,7 +146,7 @@ class MCPConnection:
             result = await asyncio.wait_for(
                 self._session.call_tool(name, arguments or {}), timeout=timeout_s
             )
-        if getattr(result, "isError", False):
+        if getattr(result, "is_error", False) or getattr(result, "isError", False):
             raise MCPError(f"{self.label}.{name} 返回错误：{_normalize(result)}")
         return _normalize(result)
 
@@ -196,26 +179,3 @@ class MCPHub:
             conns, self._conns = list(self._conns.values()), {}
         for conn in conns:
             await conn.close()
-
-
-def _command(command: str | None) -> str:
-    if not command:
-        raise MCPError("stdio transport 缺少 command")
-    if command in ("python", "python3", "py"):
-        return sys.executable
-    return command
-
-
-def _env(extra: dict[str, str]) -> dict[str, str]:
-    env = dict(os.environ)
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    # 让子进程能 import capgate（示例 MCP server 就在包里），
-    # 不依赖调用方从哪个目录启动网关。
-    import capgate
-
-    package_root = str(Path(capgate.__file__).resolve().parent.parent)
-    existing = env.get("PYTHONPATH", "")
-    parts = [package_root] + [p for p in existing.split(os.pathsep) if p]
-    env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
-    env.update(extra or {})
-    return env
