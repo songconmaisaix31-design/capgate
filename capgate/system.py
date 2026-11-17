@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -14,6 +15,7 @@ from .config import paths as resolve_paths
 from .envs import EnvRegistry
 from .ledger import Ledger
 from .mcp import MCPHub
+from .models import GcReport
 from .orchestrator import Orchestrator
 from .pool import Pool
 from .router import LLMJudge, Router, RouterConfig
@@ -48,6 +50,31 @@ class System:
 
     def warm(self) -> dict[str, int]:
         return self.supervisor.warm_stats()
+
+    def gc(
+        self, ttl_days: float = 30.0, dry_run: bool = False, now: datetime | None = None
+    ) -> GcReport:
+        """清理过期产物：引用计数护住未完成任务与被消费产物，删除动作记入账本。"""
+        now = now or datetime.now(UTC)
+        candidates, protected, scanned = self.ledger.gc_candidates(ttl_days, now)
+        report = GcReport(
+            dry_run=dry_run,
+            scanned=scanned,
+            expired=len(candidates),
+            protected=protected,
+            items=candidates,
+        )
+        deleted = 0
+        reclaimed = 0
+        if not dry_run:
+            for item in candidates:
+                if self.store.delete(item.path):
+                    self.ledger.record_gc(item.task_id, item.sha256, item.path, item.bytes)
+                    deleted += 1
+                    reclaimed += item.bytes
+            report.deleted = deleted
+            report.reclaimed_bytes = reclaimed
+        return report
 
 
 def load_router_config(root: Path) -> RouterConfig:

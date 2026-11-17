@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .agents import AgentContext, AgentError, AgentOutput, ToolBox, build
+from .artifacts import StreamSession, current_stream
 from .models import EnvManifest, TaskSpec, new_id
 from .pool import Pool, Resolved
 
@@ -111,6 +112,7 @@ class Supervisor:
         budget_s: int | None = None,
         keep_warm: bool = False,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        stream: StreamSession | None = None,
     ) -> Execution:
         adapter = build(env.agent.adapter, env.agent.config)
         sem = self._sem(env)
@@ -127,6 +129,7 @@ class Supervisor:
                 log=on_event or (lambda kind, payload: None),
             )
             started = time.monotonic()
+            token = current_stream.set(stream)
             try:
                 output = await asyncio.wait_for(
                     adapter.run(ctx), timeout=float(budget_s or task.budget_s)
@@ -137,6 +140,8 @@ class Supervisor:
             except BaseException:
                 await self.release(inst, env, keep=False)
                 raise
+            finally:
+                current_stream.reset(token)
             latency_ms = int((time.monotonic() - started) * 1000)
             await self.release(inst, env, keep=keep_warm)
             return Execution(
