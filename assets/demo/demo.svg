@@ -34,7 +34,7 @@
     <text x="88" y="254" class="title">selfhost · 用 capgate 跑自己的质量门</text>
     <text x="44" y="272" class="cmd">$ python -m selfhost.loop --only T03</text>
     <text x="44" y="284" class="line" style="animation-delay:0.69s">selfhost · root=&lt;repo&gt;/selfhost</text>
-    <text x="44" y="305" class="line" style="animation-delay:0.78s">envs=3  capabilities=1</text>
+    <text x="44" y="305" class="line" style="animation-delay:0.78s">envs=5  capabilities=1</text>
     <text x="44" y="326" class="line ok" style="animation-delay:0.87s">✓ triage   汇总待办草稿与仓库状态，决定今天先做哪件事</text>
     <text x="44" y="347" class="line accent" style="animation-delay:0.96s">    domain    → issue-triage</text>
     <text x="44" y="368" class="line accent" style="animation-delay:1.05s">    pipeline  → issue-triage</text>
