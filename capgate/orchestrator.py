@@ -9,10 +9,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Any
 
-from .artifacts import ArtifactStore
+from .artifacts import ArtifactStore, StreamReader, StreamSession, StreamWriter
 from .envs import EnvRegistry
 from .ledger import Ledger
 from .models import (
@@ -220,6 +221,7 @@ class Orchestrator:
     ) -> list[RunResult]:
         produced: set[str] = set()
         payloads: dict[str, Any] = {}
+        payload_meta: dict[str, Artifact] = {}
         remaining = list(pipeline)
         blocked = False
         effective_runs: list[RunResult] = []
@@ -234,29 +236,137 @@ class Orchestrator:
                 wave = remaining[:1]  # 契约成环或不可满足：先跑一个，让失败显性化
             remaining = [env for env in remaining if env not in wave]
 
-            runs = await self._run_wave(task, wave, payloads, result)
-            for run in runs:
-                stop, effective_run = await self._apply_failure_policy(task, run, result, payloads)
-                blocked = stop
-                if effective_run is not None:
-                    effective_runs.append(effective_run)
+            # 流式 producer 与其流式 consumer 并发跑（见 _run_streaming_link）。
+            stream_producers = [
+                env
+                for env in wave
+                if env.stream
+                and _names(env.artifacts.produces)
+                and any(
+                    c.stream and _names(c.artifacts.consumes) & _names(env.artifacts.produces)
+                    for c in remaining
+                )
+            ]
+            normal_wave = [env for env in wave if env not in stream_producers]
+
+            if normal_wave:
+                runs = await self._run_wave(task, normal_wave, payloads, payload_meta, result)
+                for run in runs:
+                    stop, effective_run = await self._apply_failure_policy(
+                        task, run, result, payloads, payload_meta
+                    )
+                    blocked = stop
+                    if effective_run is not None:
+                        effective_runs.append(effective_run)
+
+            for producer in stream_producers:
+                produces = _names(producer.artifacts.produces)
+                consumers = [
+                    env
+                    for env in remaining
+                    if env.stream and _names(env.artifacts.consumes) & produces
+                ]
+                remaining = [env for env in remaining if env not in consumers]
+                runs = await self._run_streaming_link(
+                    task, producer, consumers, payloads, payload_meta, result
+                )
+                for run in runs:
+                    stop, effective_run = await self._apply_failure_policy(
+                        task, run, result, payloads, payload_meta
+                    )
+                    blocked = stop
+                    if effective_run is not None:
+                        effective_runs.append(effective_run)
+
             produced = set(payloads)
         return effective_runs
+
+    async def _run_streaming_link(
+        self,
+        task: TaskSpec,
+        producer: EnvManifest,
+        consumers: list[EnvManifest],
+        payloads: dict[str, Any],
+        payload_meta: dict[str, Artifact],
+        result: TaskResult,
+    ) -> list[RunResult]:
+        """流式链接：producer 与它的流式 consumer 并发跑，chunk 经产物库流转。
+
+        producer 每写一条 chunk 立即落盘到 ``.stream`` 并用内存事件通知，consumer
+        增量读同一个文件——**chunk 数据走磁盘、通知走内存**，所以下游能在上游
+        写出最终快照之前就消费到先到的 chunk。
+        """
+        writers: dict[str, StreamWriter] = {}
+        for name in _names(producer.artifacts.produces):
+            writers[name] = self.store.open_stream(task.id, name, env_id=producer.id)
+
+        consumer_sessions: dict[str, StreamSession] = {}
+        for consumer in consumers:
+            readers: dict[str, StreamReader] = {}
+            for ref in consumer.artifacts.consumes:
+                name = ArtifactContract.parse(ref)[0]
+                if name in writers:
+                    readers[name] = self.store.read_stream(writers[name])
+            consumer_sessions[consumer.id] = StreamSession(readers=readers)
+
+        coros = [
+            self._run_env(
+                task,
+                producer,
+                payloads,
+                payload_meta,
+                result,
+                stream=StreamSession(writers=writers),
+            )
+        ]
+        for consumer in consumers:
+            coros.append(
+                self._run_env(
+                    task,
+                    consumer,
+                    payloads,
+                    payload_meta,
+                    result,
+                    stream=consumer_sessions[consumer.id],
+                )
+            )
+        runs = await asyncio.gather(*coros, return_exceptions=False)
+
+        # 引用计数补记：流式产物的 sha 要到 producer seal 后才已知，此时再登记
+        # consumer 的消费，喂给 GC 判断"被引用则不能删"。
+        for consumer, run in zip(consumers, runs[1:], strict=False):
+            for ref in consumer.artifacts.consumes:
+                name = ArtifactContract.parse(ref)[0]
+                if name in payload_meta:
+                    self.ledger.add_artifact_ref(
+                        task.id, payload_meta[name].sha256, consumer.id, run.run_id
+                    )
+
+        # 收尾：关掉流式文件句柄，删掉临时的 .stream（最终快照是 .json）。
+        for session in consumer_sessions.values():
+            for reader in session.readers.values():
+                reader.close()
+        for writer in writers.values():
+            writer.close()
+            with contextlib.suppress(OSError):
+                writer.stream_path.unlink(missing_ok=True)
+        return list(runs)
 
     async def _run_wave(
         self,
         task: TaskSpec,
         wave: list[EnvManifest],
         payloads: dict[str, Any],
+        payload_meta: dict[str, Artifact],
         result: TaskResult,
     ) -> list[RunResult]:
         if len(wave) == 1 or not task.allow_parallel:
             runs = []
             for env in wave:
-                runs.append(await self._run_env(task, env, payloads, result))
+                runs.append(await self._run_env(task, env, payloads, payload_meta, result))
             return runs
         runs = await asyncio.gather(
-            *[self._run_env(task, env, payloads, result) for env in wave],
+            *[self._run_env(task, env, payloads, payload_meta, result) for env in wave],
             return_exceptions=False,
         )
         return list(runs)
@@ -266,7 +376,9 @@ class Orchestrator:
         task: TaskSpec,
         env: EnvManifest,
         payloads: dict[str, Any],
+        payload_meta: dict[str, Artifact],
         result: TaskResult,
+        stream: StreamSession | None = None,
     ) -> RunResult:
         agent_decision = self.router.route_agent(env, task.task_type)
         self.ledger.decide(task.id, agent_decision)
@@ -280,6 +392,11 @@ class Orchestrator:
         }
 
         run_id = self.ledger.start_run(task.id, env, env.agent.adapter, model)
+        # 引用计数：把这次 env 消费了哪些产物登记下来，供 GC 判断"被引用则不能删"。
+        for ref in env.artifacts.consumes:
+            name = ArtifactContract.parse(ref)[0]
+            if name in payload_meta:
+                self.ledger.add_artifact_ref(task.id, payload_meta[name].sha256, env.id, run_id)
         self.ledger.event(
             task.id,
             "env.start",
@@ -303,10 +420,21 @@ class Orchestrator:
                 artifacts=inputs,
                 run_id=run_id,
                 on_event=on_event,
+                stream=stream,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # 流式 producer 失败：seal 成截断快照，让并发中的 consumer 拿到明确的
+            # truncated 标记，而不是永远等下去。
+            if stream is not None and stream.writers:
+                for name, writer in stream.writers.items():
+                    writer.mark_truncated()
+                    artifact = writer.seal()
+                    self.ledger.add_artifact(task.id, artifact)
+                    result.artifacts.append(artifact)
+                    payloads[name] = self.store.load(artifact)
+                    payload_meta[name] = artifact
             run = RunResult(
                 task_id=task.id,
                 env_id=env.id,
@@ -323,12 +451,27 @@ class Orchestrator:
 
         artifacts: list[Artifact] = []
         declared = _names(env.artifacts.produces)
-        emitted = set(execution.output.artifacts)
-        for name, payload in execution.output.artifacts.items():
-            artifact = self.store.put(task.id, name, payload, env_id=env.id, run_id=run_id)
-            self.ledger.add_artifact(task.id, artifact)
-            artifacts.append(artifact)
-            payloads[name] = payload
+        mode = "stream" if env.stream else "block"
+        if stream is not None and stream.writers:
+            # 流式 producer：seal 写出的 chunk，组装最终快照。
+            emitted: set[str] = set()
+            for name, writer in stream.writers.items():
+                artifact = writer.seal()
+                self.ledger.add_artifact(task.id, artifact)
+                artifacts.append(artifact)
+                payloads[name] = self.store.load(artifact)
+                payload_meta[name] = artifact
+                emitted.add(name)
+        else:
+            emitted = set(execution.output.artifacts)
+            for name, payload in execution.output.artifacts.items():
+                artifact = self.store.put(
+                    task.id, name, payload, env_id=env.id, run_id=run_id, stream=env.stream
+                )
+                self.ledger.add_artifact(task.id, artifact)
+                artifacts.append(artifact)
+                payloads[name] = payload
+                payload_meta[name] = artifact
 
         missing = declared - emitted
         status: str = "ok" if not missing else "degraded"
@@ -351,6 +494,7 @@ class Orchestrator:
                 "usage": execution.output.usage,
                 "instance": execution.instance_id,
                 "warm": should_keep_warm(env, rate, samples, status == "ok"),
+                "mode": mode,
             },
         )
         self.ledger.event(
@@ -360,6 +504,7 @@ class Orchestrator:
                 "status": status,
                 "ms": execution.latency_ms,
                 "artifacts": [a.name for a in artifacts],
+                "mode": mode,
             },
             env_id=env.id,
         )
@@ -373,6 +518,7 @@ class Orchestrator:
         run: RunResult,
         result: TaskResult,
         payloads: dict[str, Any],
+        payload_meta: dict[str, Artifact],
     ) -> tuple[bool, RunResult | None]:
         if run.status in ("ok", "degraded"):
             return False, run
@@ -384,7 +530,7 @@ class Orchestrator:
             result.status = "degraded"
             result.error = result.error or run.error
             return False, run
-        return False, await self._retry_alternatives(task, env, run, result, payloads)
+        return False, await self._retry_alternatives(task, env, run, result, payloads, payload_meta)
 
     async def _retry_alternatives(
         self,
@@ -393,6 +539,7 @@ class Orchestrator:
         run: RunResult,
         result: TaskResult,
         payloads: dict[str, Any],
+        payload_meta: dict[str, Artifact],
     ) -> RunResult | None:
         domain = next(decision for decision in result.decisions if decision.stage == "domain")
         failures = [run]
@@ -424,7 +571,7 @@ class Orchestrator:
                 {"failed_env": run.env_id, "replacement_env": alternative.id, "attempt": attempt},
                 env_id=run.env_id,
             )
-            run = await self._run_env(task, alternative, payloads, result)
+            run = await self._run_env(task, alternative, payloads, payload_meta, result)
             if run.status in ("ok", "degraded"):
                 return run
             failures.append(run)

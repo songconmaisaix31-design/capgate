@@ -42,7 +42,7 @@ def version() -> None:
 @app.command()
 def doctor(root: str = typer.Option(None, "--root", help="仓根目录（默认当前目录）")) -> None:
     """自检：依赖、SQLite、能力与 env 的载入问题。"""
-    from .db import wal_is_unsafe
+    from .db import concurrent_writer_detected, wal_is_unsafe
 
     p = resolve_paths(root)
     console.print(f"[bold]root[/bold] {p.root}")
@@ -55,6 +55,11 @@ def doctor(root: str = typer.Option(None, "--root", help="仓根目录（默认�
         )
     else:
         console.print(f"[bold]sqlite[/bold] {ver}")
+    if concurrent_writer_detected(p.db):
+        console.print(
+            "[yellow]检测到其他进程正在持有账本写锁[/yellow]（CLI 与 serve 同时跑？）。"
+            "本机单写者模型下写操作会串行排队，不会丢事件。"
+        )
     try:
         import importlib.metadata as md
 
@@ -275,6 +280,31 @@ def stats(
     """账本聚合。"""
     system = _system(root)
     render.stats_panel(system.ledger.stats(), system.ledger.perf(task_type=task_type), console)
+    system.ledger.close()
+
+
+@app.command()
+def gc(
+    ttl_days: float = typer.Option(30.0, "--ttl-days", help="产物保留天数"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只预览会删什么，不真删"),
+    yes: bool = typer.Option(False, "--yes", help="确认执行删除（不加则默认 dry-run）"),
+    root: str = typer.Option(None, "--root"),
+) -> None:
+    """按 TTL 清理过期产物；引用计数护住未完成任务与被消费产物，删除记入账本。"""
+    if dry_run and yes:
+        raise typer.BadParameter("--dry-run 与 --yes 不能同时给")
+    system = _system(root)
+    report = system.gc(ttl_days=ttl_days, dry_run=not yes)
+    if yes:
+        console.print(
+            f"[green]已删除 {report.deleted} 个[/green]、回收 {report.reclaimed_mb:.1f} MB"
+            f"（{report.protected} 个过期但被引用，保留）"
+        )
+    else:
+        console.print(
+            f"将删除 {report.expired} 个、可回收 {report.reclaimable_mb:.1f} MB"
+            f"（{report.protected} 个过期但被引用，保留）。确认执行加 --yes"
+        )
     system.ledger.close()
 
 

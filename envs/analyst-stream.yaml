@@ -1,0 +1,31 @@
+id: analyst-stream
+domain: 内容分析
+tags: [流式]
+prior: 2.5
+stream: true
+capabilities:
+  - id: sdk-text
+    kind: sdk
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - stream_collect: { name: crawl_batch, until: [links] }
+      as: batch
+    - { capability: sdk-text, tool: summarize_links, args: { links: "{{ batch.links }}" }, as: stats }
+    - stream_collect: { name: crawl_batch, until: [text] }
+      as: batch
+    - { capability: sdk-text, tool: word_freq, args: { text: "{{ batch.text }}" }, as: freq }
+    - emit:
+        name: crawl_summary
+        body:
+          source: "{{ batch.url }}"
+          total_links: "{{ stats.total }}"
+          hosts: "{{ stats.hosts }}"
+          top_terms: "{{ freq.top }}"
+artifacts:
+  consumes: [crawl_batch]
+  produces: [crawl_summary]
+notes: 流式演示：增量消费 crawl_batch 的 chunk，links 一到就汇总，不等整块产出。

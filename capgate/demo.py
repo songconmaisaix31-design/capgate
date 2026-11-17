@@ -1,9 +1,10 @@
 """演示场景：不依赖外网，跑通"多 env + 契约交接 + 账本"。
 
-三个场景刻意覆盖不同的编排形状：
+场景刻意覆盖不同的编排形状：
     pipeline  单链接力：采集 → 汇总
     branch    并行分叉：采集 ∥ 链上，再汇总（汇总只吃采集的产物）
     doc       单 env：知识问答（RAG 独立成一个环境）
+    stream    流式接力：crawler-stream → analyst-stream（边爬边喂）
 """
 
 from __future__ import annotations
@@ -32,6 +33,12 @@ SCENARIOS: dict[str, dict] = {
         "extra": {},
         "hint": "单 env：doc-qa（RAG 能力）",
     },
+    "stream": {
+        "goal": "流式抓取示例站点并汇总其中的链接",
+        "tags": ["流式"],
+        "extra": {},
+        "hint": "流式接力：crawler-stream → analyst-stream（边爬边喂）",
+    },
 }
 
 
@@ -55,3 +62,13 @@ def build_task(name: str, root: Path, goal: str | None = None) -> TaskSpec:
 async def run_demo(system: System, name: str, goal: str | None = None) -> TaskResult:
     task = build_task(name, system.paths.root, goal=goal)
     return await system.orchestrator.run(task)
+
+
+async def run_stream_comparison(system: System) -> tuple[TaskResult, TaskResult]:
+    """同输入对比整块（crawler → analyst）与流式（crawler-stream → analyst-stream）。
+
+    两者抓同一个 fixture、产出同样的 crawl_summary，可以对比结果一致性与耗时。
+    """
+    block = await run_demo(system, "pipeline")
+    stream = await run_demo(system, "stream")
+    return block, stream
