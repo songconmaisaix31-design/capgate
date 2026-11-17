@@ -115,7 +115,7 @@ capgate/
   capabilities/     能力声明
   schemas/          产物 JSON Schema
   fixtures/         离线夹具（页面 + 语料）
-  tests/            40 个测试
+  tests/            46 个测试
 ```
 
 ## 扩展
