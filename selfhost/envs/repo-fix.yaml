@@ -17,6 +17,7 @@ agent:
         path: "{{ input.path }}"
         content: "{{ input.content }}"
         allow_write: "{{ input.allow_write }}"
+        reason: "{{ task.goal }}"
       as: patch
     - emit:
         name: patch
@@ -25,4 +26,4 @@ artifacts:
   produces: [patch]
 resources:
   warm: false
-notes: 受限写入（issue #014）。默认 dry-run，输入里 allow_write=true 才落盘；路径只许仓库内白名单目录。没有任务卡，需显式给 path/content/allow_write 输入。
+notes: 受限写入（issue #014）。默认 dry-run；正式写入除 allow_write=true 外，还要求进程启动时通过 CAPGATE_SELFHOST_APPROVED_PATCH 收到匹配的已审 patch 产物。没有任务卡，需显式给 path/content/allow_write 输入。

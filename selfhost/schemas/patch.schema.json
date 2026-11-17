@@ -10,6 +10,7 @@
     "diff": { "type": "string" },
     "old_sha256": { "type": "string" },
     "new_sha256": { "type": "string" },
+    "reason": { "type": "string" },
     "allow_write": { "type": "boolean" }
   }
 }
