@@ -1,14 +1,13 @@
 # capgate · 本地能力网关
 
-A resident local gateway that decides which domain environments a task pulls, which agent and
-model each environment runs, and records the whole decision chain where you can read it.
+Capgate is a resident local gateway for task scheduling, versioned capabilities, and decision
+records. It selects domain environments, calls their Agents and models, and records each step.
 
-一个常驻本地的能力网关：它决定一个任务该拉哪几个领域环境、每个环境用哪个 Agent 的哪个模型，
-并把每次的决策链摊开给你看。
+Capgate 常驻本机，管理任务调度、带版本的能力和决策账本。它选择领域环境，调用该环境配置的
+Agent 和模型，并记录每个执行步骤。
 
 ![python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![license](https://img.shields.io/badge/license-MIT-3fb950)
-![tests](https://img.shields.io/badge/tests-64%20passed-3fb950)
 ![style](https://img.shields.io/badge/style-ruff-261230)
 ![mode](https://img.shields.io/badge/mode-local--only-8b949e)
 
@@ -27,9 +26,9 @@ English first, Chinese immediately after, in the same section — this is one do
 |  |  |
 |---|---|
 | **Problem**<br/>问题 | Agents own the loop, so every session re-grows its prompt, and nobody knows which tool combination actually works.<br/>Agent 拥有循环，提示词每会话重长一遍，也没人知道哪个工具组合真的有效。 |
-| **Approach**<br/>做法 | Move the loop into a resident gateway. Environments own capabilities; agents become things the gateway calls.<br/>把循环搬进常驻网关。环境拥有能力，Agent 变成被网关调用的东西。 |
+| **Approach**<br/>做法 | The gateway schedules environments. Each environment defines its capabilities, Agent, resource limits and artifact contract.<br/>网关负责调度。每个环境声明能力、Agent、资源约束和产物契约。 |
 | **Cost**<br/>代价 | One more trust boundary, one more single point of failure, and a state model you have to operate.<br/>多一个信任边界、多一个要运维的单点，还有一套得自己运营的状态模型。 |
-| **Not**<br/>不是 | Not an agent framework, not a hosted service, not a tool marketplace.<br/>不是 Agent 框架，不是云服务，不是工具市场。 |
+| **Scope**<br/>范围 | Scheduling runs on one local machine. Agents retain their own planning and tool selection. Agent-autoloop handles incoming events and operator-triggered reruns.<br/>调度在单台本机运行。Agent 保留自身的规划与工具选择。agent-autoloop 负责事件接入和人工发起的重跑。 |
 
 ## The problem · 问题
 
@@ -73,8 +72,8 @@ Four nouns carry the whole design. Each has exactly one rule.
 |---|---|
 | **Capability**<br/>能力 | A versioned part: MCP server, RAG, in-process SDK function.<br/>一个有版本的零件：MCP server、RAG、进程内 SDK 函数。 |
 | **Env**<br/>环境 | The only packaging unit: capabilities + agent + artifact contract + resource profile.<br/>唯一的封装单位：能力组合 + Agent + 产物契约 + 资源画像。 |
-| **Artifact**<br/>产物 | The only channel between envs. Content-addressed, schema-checked, never passed in memory.<br/>环境之间唯一的通道。内容寻址、schema 校验，绝不靠内存传递。 |
-| **Ledger**<br/>账本 | Routing scores are derived from it, never typed in. Human labels outrank run status.<br/>路由分数由它派生，绝不手填。人的验收标签压过运行状态。 |
+| **Artifact**<br/>产物 | Environments exchange artifacts through the store. The store validates each snapshot against its schema and records its content hash.<br/>环境通过产物库交换数据。产物库校验快照的 schema，并记录内容哈希。 |
+| **Ledger**<br/>账本 | Routing scores use recorded runs grouped by task type, environment, adapter and model. Human rejection excludes a run from the successful samples.<br/>路由按任务类型、环境、适配器和模型统计已记录的运行。人工差评会从成功样本中剔除相关运行。 |
 
 ## Capabilities · 能力清单
 
@@ -88,57 +87,60 @@ Every row below is a command you can run; `--help` on any of them is the source 
 | `capgate probe <cap>` | Really connects to a capability and lists the tools it exposes.<br/>真连一次能力，列出它实际暴露的工具。 |
 | `capgate call <cap> <tool>` | Calls the tool once and prints the real payload shape.<br/>调一次工具，打印真实返回形状。 |
 | `capgate solve "<goal>" -t <tag>` | Routes a task, runs it, prints the decision chain.<br/>路由一个任务、执行、打印决策链。 |
-| `capgate chain <task_id>` | Replays why a finished task went the way it did.<br/>复盘一个已完成任务为什么这么走。 |
+| `capgate chain <task_id>` | Shows routing reasons, run timings, and artifacts. Add `--json` for events and full SHA-256 values.<br/>查看路由理由、每步耗时和产物。加 `--json` 可查看事件和完整 SHA-256。 |
 | `capgate rate <task_id> --good\|--bad` | Records a human verdict; feeds back into routing.<br/>记录人工验收，直接喂回路由。 |
-| `capgate stats` | Aggregates by `(env, adapter, model)`.<br/>按环境/适配器/模型聚合。 |
+| `capgate stats --type <task_type>` | Reports results by environment, adapter and model for the selected standard task type.<br/>按标准任务类型查看各环境、适配器和模型的运行统计。 |
 | `capgate envs` / `caps` | Lists domain environments and the capability pool.<br/>列出领域环境与能力池。 |
-| `capgate demo -s <scenario>` | Offline end-to-end scenarios (`pipeline` / `branch` / `doc`).<br/>离线端到端场景。 |
-| `capgate serve` | Local dashboard at `127.0.0.1:8787`.<br/>本地看板。 |
+| `capgate demo -s <scenario>` | Runs local scenarios (`pipeline` / `branch` / `doc` / `stream`).<br/>运行本地端到端场景。 |
+| `capgate gc --dry-run` | Lists expired artifacts eligible for cleanup. Use `--yes` to apply cleanup and record deletions in the ledger.<br/>列出可清理的过期产物。使用 `--yes` 执行清理并记录删除事件。 |
+| `capgate serve` | The dashboard at `127.0.0.1:8787` displays task history, records verdicts, sets routing pins, and submits rerun requests to agent-autoloop.<br/>本地看板可查任务历史、记录验收、指定路由环境，并把重跑请求提交给 agent-autoloop。 |
 | `python -m selfhost.loop` | Runs this repo's own quality gates through the gateway.<br/>用网关跑本仓库自己的质量门。 |
 
-Six domains, seven environments, six capabilities — the current wiring:
+The repository includes these environment manifests. Add a domain by declaring an environment
+and its tags in `envs/*.yaml`. A workspace with `taxonomy.yaml` resolves aliases before recording tasks.
 
-六个域、七个环境、六个能力，当前的接线：
+仓库包含下表中的环境清单。新增业务域可在 `envs/*.yaml` 声明环境和标签。有 `taxonomy.yaml`
+的工作区在任务入库前归并别名。
 
 | Domain · 域 | Env · 环境 | Capability · 能力 |
 |---|---|---|
 | 数据采集 | `crawler` | `mcp-fetch` (bundled example, 3 tool calls)<br/>随包示例，三次工具调用 |
+| 数据采集 | `crawler-stream` | `mcp-fetch` emits chunks through a streaming artifact contract<br/>通过流式产物契约写入数据块 |
 | 内容分析 | `analyst` | `sdk-text` (consumes `crawl_batch`)<br/>消费上游产物 |
+| 内容分析 | `analyst-stream` | `sdk-text` reads chunks before the final snapshot<br/>在最终快照写完前读取数据块 |
 | 链上数据 | `bca-chain` | `mcp-bca` · 125 tools, 7 whitelisted<br/>125 个工具，白名单 7 个 |
 | 链上数据 | `bca-evm` | `mcp-bca` (same process, `shared: true`)<br/>同一进程，共享连接 |
-| 开发环境 | `fit-env` | `mcp-fit` · 139 endpoints registry<br/>139 个端点的注册表 |
+| 开发环境 | `fit-env` | `mcp-fit` (registered tools and environment checks)<br/>工具注册表与环境体检 |
 | 知识问答 | `doc-qa` | `mcp-rag` (bundled example RAG)<br/>随包示例 RAG |
+| 模型知识问答 | `doc-qa-model` | `mcp-rag` with an OpenAI-compatible model API<br/>通过兼容 OpenAI 的模型 API 检索已授权语料 |
+| 判断上下文 | `swa-attention` | `mcp-swa` exposes read-only attention state, focus and experience queries<br/>查询注意力状态、焦点和经验 |
+| 代码修改 | `codex-dev` | Codex CLI with `gpt-6.1-sol` returns a structured `codex_change` suggestion from supplied context<br/>通过 Codex CLI 调用 `gpt-6.1-sol`，按提供的上下文生成结构化 `codex_change` 建议 |
 | 演示 | `chain-watch` | `sdk-chain` (deterministic stub)<br/>确定性演示桩 |
 
 ## Quick start · 快速开始
 
-Three steps, all offline. Python 3.11+.
+Use Python 3.11+. The bundled pipeline uses a local fixture after installation.
+For MCP SDK 2.x, install `.[dev,mcp-v2]` in its own Python environment.
 
-三步，全程离线。需要 Python 3.11+。
+使用 Python 3.11+。安装之后可在本地用仓库示例数据运行流水线。需要 MCP SDK 2.x 时，在独立
+Python 环境中安装 `.[dev,mcp-v2]`。
 
 ```bash
-pip install -e ".[dev]"                                  # install · 安装
+python -m pip install -e ".[dev,mcp]"                   # install with MCP SDK 1.x · 安装 MCP SDK 1.x
 python -m capgate doctor                                 # self-check · 自检
 python -m capgate demo -s pipeline --brief                # run a task · 跑一次任务
 ```
 
-To wire a real MCP instead of the bundled examples, probe it first — it is the only reliable way
-to learn the tool names and payload shapes:
+Set the installed paths for external MCPs. This PowerShell example uses `probe` to see the
+available tools and `call` to check a real result.
 
-要接真实 MCP，先 probe 一次——这是唯一可靠地知道工具名与返回形状的办法：
+配置外部 MCP 的安装位置。以下 PowerShell 示例用 `probe` 列出可用工具，再用 `call` 检查实际返回结果。
 
-```bash
-python -m capgate probe mcp-bca                 # lists 125 tools · 列出 125 个工具
-python -m capgate call mcp-bca capability_list  # real payload · 真实返回
-```
-
-Real MCPs need local installs; paths are overridable, never hardcoded:
-
-真实 MCP 需要本机装好；路径可覆盖，不写死：
-
-```bash
-$env:CAPGATE_BCA_HOME="C:/Users/DW/orca/blockchain-anything"   # Windows
-$env:CAPGATE_FIT_HOME="D:/repos/fit-protocol"
+```powershell
+$env:CAPGATE_BCA_HOME="C:/repos/blockchain-anything"
+$env:CAPGATE_FIT_HOME="C:/repos/fit-protocol"
+python -m capgate probe mcp-bca
+python -m capgate call mcp-bca capability_list
 python -m capgate solve "区块链有哪些能力可用？" -t 区块链 -t 能力清单
 ```
 
@@ -150,8 +152,11 @@ python -m capgate solve "区块链有哪些能力可用？" -t 区块链 -t 能�
 | [docs/domains.md](docs/domains.md) | You are adding a domain and need to pick tags.<br/>要加一个领域，需要定 tag。 |
 | [docs/decisions.md](docs/decisions.md) | You are about to change the design — read why it is like this first.<br/>要改设计前，先看为什么现在是这样（15 条 ADR）。 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Before opening a PR.<br/>提 PR 之前。 |
-| [.github/issues/](.github/issues/README.md) | You want a concrete next task (14 open, with acceptance criteria).<br/>想找一件能干的活。 |
+| [.github/issues/](.github/issues/README.md) | Original requirements and acceptance criteria.<br/>原始需求与验收条件。 |
 | [selfhost/README.md](selfhost/README.md) | You want to build this repo with this repo.<br/>想用 capgate 构建 capgate。 |
+| [docs/model-routing.md](docs/model-routing.md) | Configure a model endpoint and examine usage and routing decisions.<br/>配置模型端点，查看用量和路由裁决。 |
+| [docs/storage.md](docs/storage.md) | Inspect retained artifacts, streaming contracts and local writer coordination.<br/>了解产物保留、流式契约和本机写入协调。 |
+| [integrations/agent-autoloop/README.md](integrations/agent-autoloop/README.md) | Configure agent-autoloop reruns and the WeCom entry point.<br/>配置 agent-autoloop 重跑和企业微信入口。 |
 
 ## Repository layout · 仓库结构
 
@@ -174,28 +179,19 @@ capgate/
 ├── selfhost/           # builds this repo · 自举工作区
 ├── tools/make-demo.mjs # renders the demo SVG · 渲染演示动效
 ├── assets/demo/        # generated, committed · 生成的动效
-└── tests/              # 64 tests · 64 个测试
+└── tests/              # unit and integration tests · 单元测试与集成测试
 ```
 
 ## Status · 状态
 
-`0.1.0`. What actually ran, not what is planned:
-
-`0.1.0`。下面是真跑过的，不是打算做的：
-
-- `pytest -q` → **64 passed** (3 of them spawn the real BCA / FIT MCPs, skipped when missing).
-- `capgate demo -s all` → **3 scenarios ok**, offline, no network.
-- `python -m selfhost.loop` → **3 tasks ok** (lint 3.3s, test 16.3s, triage 0.2s).
-- `capgate probe mcp-bca` → **125 tools**; `mcp-fit` → **6 tools**.
-- Shared capability reuse: first `bca-chain` run 3.3s, second env on the same connection ~10ms.
-
-Remaining issues and limitations:
-
-尚未完成的功能与限制：
-
-- The `openai` and `cli` adapters were never run against a real endpoint.
-- No streaming artifacts, no artifact GC, no multi-writer support — single-user, local-only.
-- `selfhost` can check this repo but cannot fix it; write access is issue #014.
+| Area · 范围 | Verification · 验证 |
+|---|---|
+| MCP SDK 1.x / 2.x | Both accessed real BCA and FIT services. BCA exposed 125 tools and FIT exposed 6 in the validation environment.<br/>两版均连接了真实 BCA 和 FIT。验收环境中 BCA 暴露 125 个工具，FIT 暴露 6 个。 |
+| Codex | A public Go repository task ran via HTTP and the native Codex controller. The generated diff passed `git apply --check`; each event ID matched a SQLite row and the native session.<br/>公开 Go 项目的任务经过 HTTP 和 Codex 原生控制器。diff 通过 `git apply --check`，每个事件编号都在 SQLite 中核对，并与原生会话对应。 |
+| Model routing · 模型路由 | A live DeepSeek endpoint verified retrieval, token accounting, and the routing judge. Usage is also retained when an artifact fails validation.<br/>真实 DeepSeek 端点验证了检索、用量统计和模型裁决。产物校验失败时仍保留已知用量。 |
+| Selfhost · 自举 | The gateway ran the lint, triage and README checks. The restricted write flow requires an operator-reviewed patch, and the ledger stores the diff and execution reason.<br/>网关运行了静态检查、待办梳理和 README 校验。受限写入需要操作者审核 patch，账本保留 diff 和执行理由。 |
+| Agent-autoloop | A real local worker reran a FIT task, and repeated requests reused the same event and task. The WeCom entry point requires a real bot to verify message delivery, attachments and reconnection.<br/>实际本机工作器重跑了 FIT 任务，重复请求复用同一事件与任务。企业微信入口的收发、附件与重连仍需真实机器人验收。 |
+| Streaming · 流式产物 | The downstream environment started before the final snapshot and produced matching results. In six alternating pairs on a local fixture, median end-to-end latency was 66 ms streaming and 47 ms in batch mode. The latency target remains unmet for that workload.<br/>下游在最终快照完成前开始处理，产物结果一致。本机同一示例输入交替执行六对任务，端到端时延中位数为流式 66 ms、整块 47 ms。该工作负载的时延验收尚未通过。 |
 
 ## License · 许可
 

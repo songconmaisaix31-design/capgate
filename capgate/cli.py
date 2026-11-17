@@ -262,11 +262,21 @@ def solve(
 
 
 @app.command()
-def chain(task_id: str = typer.Argument(...), root: str = typer.Option(None, "--root")) -> None:
+def chain(
+    task_id: str = typer.Argument(...),
+    root: str = typer.Option(None, "--root"),
+    as_json: bool = typer.Option(False, "--json", help="输出完整决策链与产物 SHA-256"),
+) -> None:
     """查看某个任务的决策链。"""
     system = _system(root)
-    render.chain_view(system.ledger.chain(task_id), console)
-    system.ledger.close()
+    try:
+        data = system.ledger.chain(task_id)
+        if as_json:
+            emit_json(data)
+        else:
+            render.chain_view(data, console)
+    finally:
+        system.ledger.close()
 
 
 @app.command()
