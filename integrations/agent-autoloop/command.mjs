@@ -46,6 +46,7 @@ async function taskBody(capgate, mode, event, env, tags, signal) {
   const input = JSON.parse(event.detail);
   if (typeof input.text !== 'string' || typeof input.sender !== 'string' ||
       typeof input.message_id !== 'string' || typeof input.chat !== 'string' ||
+      (input.kind !== undefined && !['single', 'group'].includes(input.kind)) ||
       !Array.isArray(input.attachments)) {
     throw new Error('企微事件资料不完整');
   }
@@ -56,7 +57,10 @@ async function taskBody(capgate, mode, event, env, tags, signal) {
       hint_envs: [env],
       inputs: { request: input, question: input.text },
     },
-    source: { sender: input.sender, message_id: input.message_id, chat: input.chat },
+    source: {
+      sender: input.sender, message_id: input.message_id, chat: input.chat,
+      ...(input.kind && { kind: input.kind, received_at: event.receivedAt }),
+    },
   };
 }
 
@@ -86,6 +90,11 @@ try {
     signal,
   });
   const id = checkTaskId(created.id);
+  const indexFile = process.env.CAPGATE_WECOM_HISTORY_DB;
+  if (mode === 'wecom' && source.kind && indexFile) {
+    const { indexMessage } = await import('./wecom-index.mjs');
+    indexMessage(indexFile, provenance, id);
+  }
   const chain = await waitTask(capgate, id, signal);
   console.log(taskSummary(chain, id));
 } catch (error) {

@@ -62,6 +62,11 @@ async function listen() {
   const storage = required('CAPGATE_WECOM_ATTACHMENT_DIR');
   if (!path.isAbsolute(storage)) throw new Error('企微附件目录必须是绝对路径');
   const hub = autoloop('CAPGATE_AUTOLOOP_WECOM_KEY');
+  const indexFile = process.env.CAPGATE_WECOM_HISTORY_DB;
+  if (indexFile) {
+    const { prepareIndex } = await import('./wecom-index.mjs');
+    prepareIndex(indexFile);
+  }
   const { WSClient, WSAuthFailureError, generateReqId } = await import('@wecom/aibot-node-sdk');
   const client = new WSClient({ botId, secret, maxReconnectAttempts: -1 });
   const stopped = new AbortController();
@@ -75,7 +80,7 @@ async function listen() {
       await client.replyStream(frame, stream, '已收到请求，正在等待执行。', false);
       const body = frame.body;
       const message = await collect(client, path.join(storage, digest), body, signal);
-      const detail = JSON.stringify({ ...message, sender, chat, message_id: body.msgid });
+      const detail = JSON.stringify({ ...message, sender, chat, kind: body.chattype, message_id: body.msgid });
       if (detail.length > 4000) {
         throw new MessageError('消息和附件索引合计超过 agent-autoloop 的 4000 字限制');
       }

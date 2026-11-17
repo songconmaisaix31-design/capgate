@@ -65,4 +65,18 @@ node integrations/agent-autoloop/rerun.mjs <原任务编号> [重跑请求编号
 | `CAPGATE_WECOM_GROUPS` | 可选，逗号分隔的群聊 ID。群聊同时检查发送者 |
 | `CAPGATE_WECOM_ATTACHMENT_DIR` | 接单程序和 capgate 均可访问的绝对目录，建议放在 capgate 的 `var` 下 |
 
-消息内容、发送者、会话和附件引用保存在 capgate 任务的 `inputs.request` 中。文本也是 `inputs.question`，供问答环境使用。附件由官方 SDK 下载解密，文件保留在本机。企业微信消息 ID 用于 agent-autoloop 持久去重，重复执行同一事件会复用 capgate 任务。终态回复包含任务编号和执行状态，有结论、失败原因或产物时也会显示。回执最多 500 字，完整记录可在本机看板查询。官方 SDK 管理重连。断线期间未收到确认的消息需要核查运行记录。停止入口使用 `Ctrl+C`。
+消息内容、发送者、会话和附件引用保存在 capgate 任务的 `inputs.request` 中。文本也是 `inputs.question`，供问答环境使用。附件由官方 SDK 下载解密，文件保留在本机。企业微信消息 ID 用于 agent-autoloop 持久去重，重复执行同一事件会复用 capgate 任务。终态回复包含任务编号和执行状态，有结论、失败原因或产物时也会显示。回执最多 500 字，完整记录可在本机看板查询。
+
+“已收到请求”表示入口已收到企微回调。事件在 agent-autoloop 接受提交后才入账。官方 SDK 管理重连，断线及发送回执失败写入本机日志。缺少带任务编号的回复时，从本机查询事件或任务状态。停止入口使用 `Ctrl+C`。
+
+### 整理已接收的消息
+
+历史索引默认关闭。启用时，为 `wecom.mjs`、agent-autoloop 工作器和运行查询的本机终端设置同一 `CAPGATE_WECOM_HISTORY_DB` 绝对路径，建议放在 capgate 的 `var` 下。入口启动时建立索引，工作器在 capgate 确认任务编号后记录来源、会话、发送者、收件时间和任务编号。原文保留在原 capgate 任务中。索引只覆盖启用后由智能机器人实际收到并派发的消息。
+
+用当前 `CAPGATE_WECOM_SENDERS` 和 `CAPGATE_WECOM_GROUPS` 白名单，主动指定一种会话及开始、结束时间。开始包含在查询内，结束不包含。窗口最多处理 250 条记录，超出时提示缩小范围。
+
+```powershell
+node integrations/agent-autoloop/history.mjs --kind single --chat <企微用户ID> --since 2026-11-18T09:00:00+08:00 --until 2026-11-18T18:00:00+08:00
+```
+
+命令按索引逐条读取 capgate 任务并核对来源，输出 JSON。摘要使用已有任务结论或消息摘录。待办保留原文中的明确行动项及来源消息 ID。整理在本机执行，不另建任务或调用模型。
