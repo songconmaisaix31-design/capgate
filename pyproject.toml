@@ -20,6 +20,7 @@ dependencies = [
     "ruamel.yaml>=0.18",
     "markdown-it-py>=3",
     "unidiff>=0.7.5",
+    "jsonschema>=4.20",
     "mcp>=1.30,<3",
     "packaging>=23",
     "pywin32>=310; sys_platform == 'win32'",

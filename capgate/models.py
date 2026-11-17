@@ -107,6 +107,8 @@ class Artifact(BaseModel):
     producer_env: str | None = None
     producer_run: str | None = None
     created_at: str = Field(default_factory=utcnow)
+    stream: bool = False  # 流式通道产物（chunk 序列，落盘成最终快照）
+    truncated: bool = False  # 断流标记：下游拿到的是半截数据，而非完整快照
 
 
 # ---------------------------------------------------------------- env
@@ -149,6 +151,7 @@ class EnvManifest(BaseModel):
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
     prior: float = Field(default=1.0, gt=0)  # 路由先验权重
     failure_policy: FailurePolicy = "abort"
+    stream: bool = False  # 声明本 env 的 produces 走流式通道（默认关闭）
     notes: str = ""
 
     @field_validator("tags")
@@ -219,6 +222,43 @@ class TaskResult(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     error: str | None = None
     latency_ms: int = 0
+
+
+# ---------------------------------------------------------------- 产物 GC
+
+
+class GcItem(BaseModel):
+    """一个即将被清理的产物文件。"""
+
+    path: str
+    sha256: str
+    bytes: int
+    task_id: str
+    age_days: float
+
+
+class GcReport(BaseModel):
+    """`capgate gc` 的结果：删了什么、省了多少、护住了什么。"""
+
+    dry_run: bool = False
+    scanned: int = 0
+    expired: int = 0
+    protected: int = 0  # 过期但因引用计数/未完成任务而保留
+    deleted: int = 0
+    reclaimed_bytes: int = 0
+    items: list[GcItem] = Field(default_factory=list)
+
+    @property
+    def reclaimed_mb(self) -> float:
+        return self.reclaimed_bytes / (1024 * 1024)
+
+    @property
+    def reclaimable_bytes(self) -> int:
+        return sum(i.bytes for i in self.items)
+
+    @property
+    def reclaimable_mb(self) -> float:
+        return self.reclaimable_bytes / (1024 * 1024)
 
 
 # ---------------------------------------------------------------- 工具
