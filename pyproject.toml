@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml>=6",
     "mcp>=1.2,<2",  # 本仓库基于 1.x 的 ClientSession / FastMCP 接口；2.x 是重写，需另写 adapter
     "packaging>=23",
+    "filelock>=3.12",  # 账本跨进程写锁（本机单写者）
 ]
 
 [project.optional-dependencies]

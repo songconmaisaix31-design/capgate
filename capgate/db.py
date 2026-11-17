@@ -22,6 +22,8 @@ from pathlib import Path
 import filelock as _filelock
 
 WAL_SAFE_SINCE = (3, 51, 3)
+# 竞态修复回移到的维护分支：同一分支 >= 该版本即安全。
+_WAL_SAFE_BACKPORT = {(3, 50): (3, 50, 7), (3, 44): (3, 44, 6)}
 _LOCK_TIMEOUT_S = 10.0
 
 
@@ -40,9 +42,16 @@ def _pragmas() -> tuple[str, ...]:
 
 
 def wal_is_unsafe() -> bool:
-    """本机 SQLite 是否落在 WAL-reset 竞态的影响区间。"""
+    """本机 SQLite 是否落在 WAL-reset 竞态的影响区间。
+
+    竞态修复于 3.51.3，并回移到 3.50.7 与 3.44.6 等维护分支；低于这些门槛才算
+    受影响，避免对已回移的版本误告警。
+    """
     version = tuple(int(p) for p in sqlite3.sqlite_version.split(".")[:3])
-    return version < WAL_SAFE_SINCE
+    if version >= WAL_SAFE_SINCE:
+        return False
+    floor = _WAL_SAFE_BACKPORT.get(version[:2])
+    return floor is None or version < floor
 
 
 class FileLock:
@@ -95,7 +104,8 @@ def concurrent_writer_detected(path: Path | str) -> bool:
     lock = FileLock(lock_path_for(path), timeout=0.0)
     try:
         lock.acquire()
-    except TimeoutError:
+    except _filelock.Timeout:
+        # 只有"锁此刻被别的进程持有"这一种可预期的结果才算持锁；其余异常照常抛出。
         return True
     lock.release()
     return False
@@ -125,14 +135,21 @@ class Locked:
 
     def __enter__(self) -> sqlite3.Connection:
         self._lock.acquire()
-        if self._flock is not None:
-            self._flock.acquire()
+        try:
+            if self._flock is not None:
+                self._flock.acquire()
+        except BaseException:
+            # 外层文件锁拿不到时，先释放已取得的线程锁，避免永久占用。
+            self._lock.release()
+            raise
         return self.conn
 
     def __exit__(self, *exc: object) -> None:
-        if self._flock is not None:
-            self._flock.release()
-        self._lock.release()
+        try:
+            if self._flock is not None:
+                self._flock.release()
+        finally:
+            self._lock.release()
 
     def close(self) -> None:
         with self._lock:

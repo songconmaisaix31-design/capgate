@@ -50,7 +50,7 @@ def doctor(root: str = typer.Option(None, "--root", help="仓根目录（默认�
     ver = sqlite3.sqlite_version
     if wal_is_unsafe():
         console.print(
-            f"[yellow]sqlite {ver}[/yellow] 落在 WAL-reset 竞态区间（< 3.51.3）。"
+            f"[yellow]sqlite {ver}[/yellow] 落在 WAL-reset 竞态区间。"
             "单进程单连接使用风险低；若要多进程并发写，设 CAPGATE_SQLITE_JOURNAL=delete。"
         )
     else:
