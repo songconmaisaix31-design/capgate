@@ -1,0 +1,30 @@
+id: crawler
+domain: 数据采集
+tags: [爬虫, 抓取, 采集]
+prior: 3.0
+capabilities:
+  - id: mcp-fetch
+    kind: mcp
+    version: ">=0.1,<0.2"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.url }}" }, as: page }
+    - { capability: mcp-fetch, tool: extract_links, args: { html: "{{ page.html }}", base: "{{ page.url }}" }, as: links }
+    - { capability: mcp-fetch, tool: extract_text, args: { html: "{{ page.html }}" }, as: text }
+    - emit:
+        name: crawl_batch
+        body:
+          url: "{{ page.url }}"
+          title: "{{ page.title }}"
+          links: "{{ links.links }}"
+          text: "{{ text.text }}"
+          fetched_at: "{{ now }}"
+artifacts:
+  produces: [crawl_batch]
+resources:
+  warm: true
+  max_parallel: 4
+notes: 演示 env：scripted 快路径，不经过 LLM，输入相同则输出相同。

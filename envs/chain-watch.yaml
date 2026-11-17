@@ -1,0 +1,20 @@
+id: chain-watch
+domain: 链上数据
+tags: [链上, 区块链, 余额]
+prior: 2.0
+capabilities:
+  - id: sdk-chain
+    kind: sdk
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: sdk-chain, tool: address_balance, args: { address: "{{ input.address }}" }, as: bal }
+    - emit:
+        name: chain_balance
+        body: "{{ bal }}"
+artifacts:
+  produces: [chain_balance]
+notes: 与采集 env 无契约依赖，因此能和它并行跑，互不阻塞。

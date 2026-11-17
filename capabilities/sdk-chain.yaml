@@ -1,0 +1,9 @@
+id: sdk-chain
+kind: sdk
+title: 链上查询 SDK（演示桩：确定性伪余额，非真实链上数据）
+versions:
+  - version: "0.1.0"
+    transport: python
+    entry: "capgate.builtin:address_balance"
+    entries:
+      address_balance: "capgate.builtin:address_balance"

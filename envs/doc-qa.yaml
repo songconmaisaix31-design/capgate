@@ -1,0 +1,22 @@
+id: doc-qa
+domain: 知识问答
+tags: [文档, 问答, 检索]
+prior: 2.0
+capabilities:
+  - id: mcp-rag
+    kind: rag
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-rag, tool: search, args: { query: "{{ input.question }}", k: 3 }, as: hits }
+    - emit:
+        name: doc_answer
+        body:
+          question: "{{ input.question }}"
+          hits: "{{ hits.hits }}"
+artifacts:
+  produces: [doc_answer]
+notes: RAG 独立成一个环境，不和采集域共享任何能力实例。

@@ -1,0 +1,11 @@
+id: sdk-text
+kind: sdk
+title: 文本处理 SDK（进程内 python 函数）
+versions:
+  - version: "0.1.0"
+    transport: python
+    entry: "capgate.builtin:summarize_links"
+    entries:
+      summarize_links: "capgate.builtin:summarize_links"
+      word_freq: "capgate.builtin:word_freq"
+      compact_text: "capgate.builtin:compact_text"

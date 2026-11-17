@@ -1,0 +1,9 @@
+id: mcp-rag
+kind: rag
+title: 本地语料检索（示例 MCP，stdio）
+versions:
+  - version: "0.1.0"
+    transport: stdio
+    command: python
+    args: ["-m", "capgate.examples.mcp_rag"]
+    tools: [search, list_docs]

@@ -1,0 +1,9 @@
+id: mcp-fetch
+kind: mcp
+title: 网页抓取（示例 MCP，stdio）
+versions:
+  - version: "0.1.0"
+    transport: stdio
+    command: python
+    args: ["-m", "capgate.examples.mcp_fetch"]
+    tools: [fetch_url, extract_links, extract_text]

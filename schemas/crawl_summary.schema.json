@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "crawl_summary",
+  "type": "object",
+  "required": ["source", "total_links"],
+  "properties": {
+    "source": { "type": "string" },
+    "total_links": { "type": "integer" },
+    "hosts": { "type": "object" },
+    "top_terms": { "type": "array" }
+  },
+  "additionalProperties": false
+}

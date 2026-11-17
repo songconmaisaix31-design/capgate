@@ -1,0 +1,26 @@
+id: analyst
+domain: 内容分析
+tags: [汇总, 分析, 报告]
+prior: 2.5
+capabilities:
+  - id: sdk-text
+    kind: sdk
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: sdk-text, tool: summarize_links, args: { links: "{{ artifacts.crawl_batch.links }}" }, as: stats }
+    - { capability: sdk-text, tool: word_freq, args: { text: "{{ artifacts.crawl_batch.text }}", top: 8 }, as: freq }
+    - emit:
+        name: crawl_summary
+        body:
+          source: "{{ artifacts.crawl_batch.url }}"
+          total_links: "{{ stats.total }}"
+          hosts: "{{ stats.hosts }}"
+          top_terms: "{{ freq.top }}"
+artifacts:
+  consumes: [crawl_batch]
+  produces: [crawl_summary]
+notes: 只吃上游产物，是流水线里"接力"的那一类 env。

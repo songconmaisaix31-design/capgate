@@ -1,0 +1,10 @@
+# 路由策略
+strategy: thompson        # thompson | epsilon | static
+epsilon: 0.1              # strategy=epsilon 时的探索比例
+latency_ref_ms: 4000      # 成本惩罚的参照时延
+latency_weight: 0.25      # 成本惩罚权重
+llm_fallback: false       # 分数接近时是否让 LLM 兜底裁决
+llm_margin: 0.12          # 头名与次名差距小于它就问 LLM
+
+# 人工 pin：任务类型 -> {env, model}。优先级最高，用于线上救火与 A/B 基线。
+pins: {}
