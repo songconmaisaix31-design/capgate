@@ -174,7 +174,7 @@ class Router:
     # ---------------------------------------------------------------- 打分
 
     def _rank(self, envs: list[EnvManifest], task_type: str) -> list[dict[str, Any]]:
-        rows = {r["env_id"]: r for r in self.ledger.perf(task_type=task_type)}
+        rows = {r["env_id"]: r for r in self.ledger.perf(task_type=task_type, by_env=True)}
         scored = []
         for env in envs:
             rec = rows.get(env.id, {"n": 0, "wins": 0, "fails": 0, "avg_ms": 0.0})
