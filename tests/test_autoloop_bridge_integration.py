@@ -59,8 +59,8 @@ def running_server(args, env, url, log_path):
                 process.wait(timeout=15)
 
 
-@pytest.fixture
-def capgate_server(tmp_path):
+@contextmanager
+def running_capgate(tmp_path, port, autoloop_config=None):
     fit = Path(os.environ.get("CAPGATE_FIT_HOME", "D:/repos/fit-protocol")) / "bin" / "fit.mjs"
     if not fit.is_file():
         pytest.skip("需要本机已安装的 FIT MCP")
@@ -68,16 +68,24 @@ def capgate_server(tmp_path):
     root.mkdir()
     for directory in ("envs", "capabilities", "schemas"):
         shutil.copytree(ROOT / directory, root / directory)
-    port = free_port()
     url = f"http://127.0.0.1:{port}"
     command = [sys.executable, "-m", "capgate", "serve", "--root", str(root), "--port", str(port)]
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    for name in ("CAPGATE_AUTOLOOP_URL", "CAPGATE_AUTOLOOP_OPERATOR_KEY"):
+        env.pop(name, None)
+    env.update(autoloop_config or {})
     with running_server(command, env, f"{url}/api/health", tmp_path / "capgate.log"):
         yield url
 
 
 @pytest.fixture
-def live_autoloop(tmp_path, capgate_server):
+def capgate_server(tmp_path):
+    with running_capgate(tmp_path, free_port()) as url:
+        yield url
+
+
+@contextmanager
+def running_autoloop(tmp_path, *, with_worker):
     src = os.environ.get("CAPGATE_TEST_AUTOLOOP_DIR")
     if not src:
         pytest.skip("需设置 CAPGATE_TEST_AUTOLOOP_DIR 指向 agent-autoloop 源码目录")
@@ -89,13 +97,14 @@ def live_autoloop(tmp_path, capgate_server):
     state = tmp_path / "autoloop"
     state.mkdir()
     port = free_port()
+    gateway_port = free_port()
     url = f"http://127.0.0.1:{port}"
     env = dict(
         os.environ,
         AGENT_AUTOLOOP_HOME=str(state),
         AGENT_AUTOLOOP_RULES=str(state / "rules.json"),
         CAPGATE_AUTOLOOP_URL=url,
-        CAPGATE_BRIDGE_URL=capgate_server,
+        CAPGATE_BRIDGE_URL=f"http://127.0.0.1:{gateway_port}",
     )
     cli = [node, str(executable)]
     subprocess.run(
@@ -115,13 +124,16 @@ def live_autoloop(tmp_path, capgate_server):
     config_file = state / "config.json"
     config = json.loads(config_file.read_text(encoding="utf-8"))
     config.pop("channels", None)
+    worker = config["worker"]["name"]
+    if not with_worker:
+        del config["worker"]
     config_file.write_text(json.dumps(config), encoding="utf-8")
     rules = {
         "sources": {"capgate-operator": {"name": "capgate 操作者"}},
         "agents": {
             "capgate-rerun": {
                 "name": "capgate 重跑",
-                "worker": config["worker"]["name"],
+                "worker": worker,
                 "use": "command",
                 "command": [node, str(BRIDGE / "command.mjs"), "rerun"],
             }
@@ -145,10 +157,14 @@ def live_autoloop(tmp_path, capgate_server):
         env=env,
         encoding="utf-8",
     ).strip()
-    with running_server([*cli, "up"], env, f"{url}/healthz", tmp_path / "autoloop.log"):
-        listed = subprocess.check_output([*cli, "key", "list"], env=env, encoding="utf-8")
-        assert "source capgate-operator" in listed
-        yield node, env
+    endpoints = {
+        name: env[name] for name in ("CAPGATE_AUTOLOOP_URL", "CAPGATE_AUTOLOOP_OPERATOR_KEY")
+    }
+    with (
+        running_capgate(tmp_path, gateway_port, endpoints) as capgate_url,
+        running_server([*cli, "up"], env, f"{url}/healthz", tmp_path / "autoloop.log"),
+    ):
+        yield node, env, capgate_url
 
 
 def completed_task(url, task_id):
@@ -170,21 +186,58 @@ def test_api_preserves_budget(capgate_server):
     chain = completed_task(url, task_id)
     assert json.loads(chain["task"]["spec"])["budget_s"] == TASK["budget_s"]
     assert "env_report" in {artifact["name"] for artifact in chain["artifacts"]}
+    disabled = httpx.post(f"{url}/api/tasks/{task_id}/rerun", trust_env=False)
+    assert disabled.status_code == 503 and "重跑未启用" in disabled.json()["detail"]
 
 
-def test_autoloop_source_is_available(live_autoloop):
-    _, env = live_autoloop
-    assert httpx.get(f"{env['CAPGATE_AUTOLOOP_URL']}/healthz", trust_env=False).json()["ok"]
+def test_autoloop_relay_persists_one_event(tmp_path):
+    with running_autoloop(tmp_path, with_worker=False) as (_, env, url):
+        task_id = (
+            httpx.post(f"{url}/api/tasks", json=TASK, trust_env=False)
+            .raise_for_status()
+            .json()["id"]
+        )
+        completed_task(url, task_id)
+        endpoint = f"{url}/api/tasks/{task_id}/rerun"
+        headers = {"Idempotency-Key": "inspect-fit-again"}
+        first = httpx.post(endpoint, headers=headers, trust_env=False).raise_for_status().json()
+        assert first["routed"] == ["capgate 重跑"]
+        second = httpx.post(endpoint, headers=headers, trust_env=False).raise_for_status().json()
+        assert first == second
+        state = (
+            httpx.get(
+                f"{env['CAPGATE_AUTOLOOP_URL']}/v1/events/{first['event']}",
+                headers={"Authorization": f"Bearer {env['CAPGATE_AUTOLOOP_OPERATOR_KEY']}"},
+                trust_env=False,
+            )
+            .raise_for_status()
+            .json()
+        )
+        assert [run["state"] for run in state["runs"]] == ["queued"]
+        assert len(httpx.get(f"{url}/api/tasks", trust_env=False).raise_for_status().json()) == 1
 
 
-def test_rerun_keeps_original_task_and_deduplicates(capgate_server, live_autoloop):
-    assert hasattr(Ledger, "reserve_task"), "需合并 SQLite 的 reserve_task 实现"
-    url = capgate_server
+def test_rerun_keeps_original_task_and_deduplicates(tmp_path):
+    with running_autoloop(tmp_path, with_worker=True) as (node, env, url):
+        assert hasattr(Ledger, "reserve_task"), "需合并 SQLite 的 reserve_task 实现"
+        verify_rerun(node, env, url)
+
+
+def verify_rerun(node, env, url):
     task_id = (
         httpx.post(f"{url}/api/tasks", json=TASK, trust_env=False).raise_for_status().json()["id"]
     )
     before = completed_task(url, task_id)
-    node, env = live_autoloop
+    submitted = (
+        httpx.post(
+            f"{url}/api/tasks/{task_id}/rerun",
+            headers={"Idempotency-Key": "inspect-fit-again"},
+            trust_env=False,
+        )
+        .raise_for_status()
+        .json()
+    )
+    assert submitted["routed"] == ["capgate 重跑"]
     command = [node, str(BRIDGE / "rerun.mjs"), task_id, "inspect-fit-again"]
     first = subprocess.check_output(command, env=env, encoding="utf-8", timeout=45)
     second = subprocess.check_output(command, env=env, encoding="utf-8", timeout=45)

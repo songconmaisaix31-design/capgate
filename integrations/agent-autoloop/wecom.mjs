@@ -116,7 +116,9 @@ async function listen() {
   });
 
   client.on('authenticated', () => console.log('企业微信智能机器人已连接。'));
-  client.on('disconnected', () => console.error('企业微信连接已断开。'));
+  client.on('disconnected', () => {
+    console.error('企业微信连接已断开。断线期间未收到确认的消息可能未派发或未收到回复，请先核查运行记录。');
+  });
   client.on('reconnecting', attempt => console.error(`企业微信正在第 ${attempt} 次重连。`));
   const shutdown = new Promise((resolve, reject) => {
     process.once('SIGINT', resolve);

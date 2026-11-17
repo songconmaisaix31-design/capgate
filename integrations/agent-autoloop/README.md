@@ -49,6 +49,8 @@ node integrations/agent-autoloop/rerun.mjs <原任务编号> [重跑请求编号
 
 命令输出事件编号和请求编号。查询超时后，以同一请求编号再次调用可查询原事件。重新发起一次执行时使用新的请求编号。capgate 的 `Idempotency-Key` 会给同一事件返回同一任务编号。
 
+使用看板上的重跑按钮时，在 `capgate serve` 的进程环境中也提供 `CAPGATE_AUTOLOOP_URL` 和 `CAPGATE_AUTOLOOP_OPERATOR_KEY`。看板提交结束任务的编号，capgate 调用 agent-autoloop 的事件接口并返回事件编号。由 agent-autoloop 的规则和工作器发起新任务，来源密钥留在服务端。对相同任务重复提交同一个 `Idempotency-Key` 会返回同一事件。
+
 ## 企业微信消息
 
 使用企业微信官方智能机器人长连接。进入本目录运行 `npm ci`，在一个本机进程中设置以下环境变量，再运行 `node wecom.mjs`。
@@ -63,4 +65,4 @@ node integrations/agent-autoloop/rerun.mjs <原任务编号> [重跑请求编号
 | `CAPGATE_WECOM_GROUPS` | 可选，逗号分隔的群聊 ID。群聊同时检查发送者 |
 | `CAPGATE_WECOM_ATTACHMENT_DIR` | 接单程序和 capgate 均可访问的绝对目录，建议放在 capgate 的 `var` 下 |
 
-消息内容、发送者、会话和附件引用保存在 capgate 任务的 `inputs.request` 中。附件由官方 SDK 下载解密，文件仍保留在本机。企业微信消息 ID 用于 agent-autoloop 持久去重，接单程序在重复执行同一事件时复用 capgate 任务。终态回复包含状态、任务编号和产物名称；使用编号在本机看板查看结果详情。连接中断时官方 SDK 管理重连。停止入口使用 `Ctrl+C`，由进程关闭连接。
+消息内容、发送者、会话和附件引用保存在 capgate 任务的 `inputs.request` 中。文本也是 `inputs.question`，供问答环境使用。附件由官方 SDK 下载解密，文件保留在本机。企业微信消息 ID 用于 agent-autoloop 持久去重，重复执行同一事件会复用 capgate 任务。终态回复包含任务编号和执行状态，有结论、失败原因或产物时也会显示。回执最多 500 字，完整记录可在本机看板查询。官方 SDK 管理重连。断线期间未收到确认的消息需要核查运行记录。停止入口使用 `Ctrl+C`。
