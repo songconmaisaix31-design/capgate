@@ -9,9 +9,10 @@ import asyncio
 import contextlib
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+from uuid import NAMESPACE_URL, uuid5
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +36,7 @@ class TaskIn(BaseModel):
     hint_envs: list[str] = Field(default_factory=list)
     type: str | None = None
     allow_parallel: bool = True
+    budget_s: int = Field(default=300, gt=0)
 
 
 class OutcomeIn(BaseModel):
@@ -105,16 +107,22 @@ def create_app(system: System) -> FastAPI:
         return chain
 
     @app.post("/api/tasks")
-    async def create_task(body: TaskIn) -> dict[str, Any]:
-        spec = TaskSpec(
-            goal=body.goal,
-            tags=body.tags,
-            inputs=body.inputs,
-            hint_envs=body.hint_envs,
-            type=body.type,
-            allow_parallel=body.allow_parallel,
-        )
-        system.ledger.add_task(spec)
+    async def create_task(
+        body: TaskIn,
+        idempotency_key: Annotated[
+            str | None, Header(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+        ] = None,
+    ) -> dict[str, Any]:
+        spec = TaskSpec(**body.model_dump())
+        if idempotency_key is None:
+            system.ledger.add_task(spec)
+        else:
+            spec.id = f"task_{uuid5(NAMESPACE_URL, f'capgate:tasks:{idempotency_key}').hex}"
+            if not system.ledger.reserve_task(spec):
+                existing = system.ledger.task(spec.id)
+                if existing is None or TaskSpec.model_validate_json(existing["spec"]) != spec:
+                    raise HTTPException(409, "此 Idempotency-Key 已用于另一份任务规格")
+                return {"id": spec.id, "status": existing["status"]}
 
         async def runner() -> None:
             # 失败已经落账；这里只保证后台任务不把异常抛到事件循环外面
