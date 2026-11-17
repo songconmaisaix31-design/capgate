@@ -159,14 +159,62 @@ def test_pin_roundtrip_drives_router_decision(tmp_path):
     led.close()
 
 
+def test_pin_roundtrip_on_real_router_yaml(tmp_path, repo_root):
+    """用仓库真实 router.yaml 验证 round-trip 保留字段、注释（含行内注释）与结构。"""
+    real = repo_root / "router.yaml"
+    (tmp_path / "router.yaml").write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
+    set_pin(tmp_path, "爬虫", env="crawler")
+    text = (tmp_path / "router.yaml").read_text(encoding="utf-8")
+    for token in (
+        "strategy: thompson",
+        "epsilon: 0.1",
+        "latency_ref_ms: 4000",
+        "llm_fallback: false",
+        "thompson | epsilon | static",  # 行内注释
+        "成本惩罚",  # 行内注释
+        "人工 pin",  # pins 节注释
+    ):
+        assert token in text, f"round-trip 丢了 {token!r}"
+    from capgate.system import load_router_config
+
+    cfg = load_router_config(tmp_path)
+    assert cfg.pins == {"爬虫": {"env": "crawler"}}
+    assert cfg.strategy == "thompson"
+
+
+def test_pin_routes_real_env_registry(tmp_path, repo_root):
+    """真实 env 注册表下，pin 之后同类型任务按 pin 走。"""
+    from capgate.envs import EnvRegistry
+    from capgate.ledger import Ledger
+    from capgate.models import TaskSpec
+    from capgate.router import Router
+    from capgate.system import load_router_config
+
+    set_pin(tmp_path, "爬虫", env="crawler")
+    cfg = load_router_config(tmp_path)
+
+    reg = EnvRegistry(repo_root / "envs").load()
+    assert reg.errors == []
+    assert "crawler" in reg and "analyst" in reg
+
+    led = Ledger(tmp_path / "l.db")
+    router = Router(led, reg, cfg)
+    decision = router.route_domains(TaskSpec(goal="g", tags=["爬虫"]))
+    assert decision.strategy == "pin"
+    assert decision.chosen == ["crawler"]
+    led.close()
+
+
 def test_dashboard_html_wires_the_action_endpoints():
-    """看板与 server 端点的契约：按钮齐、端点名对得上，防止两路 Agent 各写各的。"""
+    """看板与 server 端点的契约：按钮齐、端点名对得上，防止多路 Agent 各写各的。"""
     html = (
         Path(__file__).resolve().parents[1] / "capgate" / "static" / "dashboard.html"
     ).read_text(encoding="utf-8")
     assert "验收：好" in html and "验收：差" in html
     assert "pin 当前 env" in html
     assert "重跑" in html
-    assert "/api/tasks/" in html and "/outcome" in html
-    assert "/api/pins" in html
-    assert "/rerun" in html
+    assert "/api/tasks/" in html
+    assert "'/outcome'" in html
+    assert "'/pin'" in html
+    assert "'/rerun'" in html
+    assert "/api/pins" not in html

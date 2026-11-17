@@ -44,9 +44,6 @@
   .actions button.good:hover{background:#12281a}
   .actions button.bad:hover{background:#2b1512}
   .note{width:100%;margin-top:8px}
-  .pinrow{display:flex;gap:8px;align-items:center;font-size:12px;margin:2px 0}
-  .pinrow .tag{color:var(--acc)}
-  .pinrow button{font-size:11px;padding:2px 8px}
 </style></head><body>
 <header>
   <h1>capgate</h1><span class="meta">本地能力网关 · 控制面 / 能力池 / 领域环境 / 任务编排</span>
@@ -62,7 +59,7 @@
   <div id="detail"><p class="muted">左侧选一个任务，或提交一个新的。</p></div>
 </main>
 <script>
-let current=null, timer=null, statsCache=null, pins={};
+let current=null, timer=null, statsCache=null;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function j(u,o){
   const r=await fetch(u,o);
@@ -72,9 +69,6 @@ async function j(u,o){
     throw new Error(msg);
   }
   return r.json();
-}
-async function refreshPins(){
-  try{const r=await j('/api/pins');pins=(r&&r.pins)?r.pins:r;}catch(e){pins={};}
 }
 async function refresh(){
   try{
@@ -88,7 +82,6 @@ async function refresh(){
         <div class="sub"><span class="pill ${t.status}">${esc(t.status)}</span>
           <span>${esc(t.task_type)}</span><span>${esc((t.created_at||'').slice(11,19))}</span></div>
       </div>`).join('')||'<p class="muted" style="padding:16px">还没有任务。</p>';
-    await refreshPins();
     if(current) await open_(current,true);
   }catch(e){}
 }
@@ -139,10 +132,6 @@ async function open_(id,quiet){
       <td style="width:180px"><span class="bar"><i style="width:${Math.round(rate*100)}%;background:var(--ok)"></i></span></td>
       <td class="muted">${Math.round(rate*100)}%</td></tr>`;
   }).join('');
-  const pinRows=Object.entries(pins).map(([t,v])=>`
-    <div class="pinrow"><span class="tag">${esc(t)}</span>
-      <span class="muted">${esc([v.env&&('env='+v.env),v.model&&('model='+v.model)].filter(Boolean).join(' '))}</span>
-      <button onclick="unpin('${esc(t)}')">解除</button></div>`).join('');
   const envHint=env?`pin 会把任务类型 <b>${esc(c.task.task_type)}</b> 固定到 env <b>${esc(env)}</b>`:'该任务没有可 pin 的 env';
   document.getElementById('detail').innerHTML=`
     <h2>任务</h2><div class="card"><b>${esc(c.task.goal)}</b><div class="muted">${esc(c.task.id)} · ${esc(c.task.task_type)} · ${esc(c.task.status)}</div></div>
@@ -160,7 +149,6 @@ async function open_(id,quiet){
     <h2>决策链</h2>${decs||'<p class="muted">暂无</p>'}
     <h2>执行</h2><table><tr><th>env</th><th>adapter</th><th>model</th><th>status</th><th>ms</th></tr>${runs}</table>
     <h2>环境胜率</h2><table><tr><th>env</th><th>wins/n</th><th>胜率</th><th></th></tr>${perfRows||'<tr><td colspan="4" class="muted">还没有运行样本</td></tr>'}</table>
-    <h2>人工 pin</h2>${pinRows||'<p class="muted">还没有 pin。</p>'}
     <h2>产物</h2><table><tr><th>name</th><th>sha256</th><th>bytes</th><th>path</th></tr>${arts}</table>
     <h2>事件</h2><pre>${esc(JSON.stringify((c.events||[]).map(e=>({kind:e.kind,ts:e.ts.slice(11,23)})),null,1))}</pre>`;
 }
@@ -187,23 +175,16 @@ async function pinCurrentEnv(){
   const env=domainEnv(c);
   if(!env){setNote('没有可 pin 的 env');return;}
   try{
-    await j('/api/pins',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:c.task.task_type,env})});
-    await refreshPins();await refresh();
+    await j('/api/tasks/'+current+'/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({env})});
     setNote(`已 pin：${c.task.task_type} → ${env}`);
   }catch(e){setNote(`pin 失败：${e.message}`);}
-}
-async function unpin(t){
-  try{
-    await j('/api/pins/'+encodeURIComponent(t),{method:'DELETE'});
-    await refreshPins();await refresh();
-  }catch(e){setNote(`解除失败：${e.message}`);}
 }
 async function rerunTask(){
   if(!current)return;
   try{
     const r=await j('/api/tasks/'+current+'/rerun',{method:'POST'});
-    setNote(`已重跑：新任务 ${r.id}`);
-    await refresh();
+    setNote(`重跑已转交上游，事件 ${r.event ?? '—'}。等待新任务出现在列表…`);
+    refresh();
   }catch(e){setNote(`重跑失败：${e.message}`);}
 }
 async function submitTask(){
