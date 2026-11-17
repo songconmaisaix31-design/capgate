@@ -1,10 +1,3 @@
-"""README 文档校验（issue #013）的单测。
-
-只测 ``tools/readme_check`` 的纯逻辑，不碰 node 子进程（demo 检查用
-``run_demo_check=False`` 跳过）。真实 README 的 demo.svg 最新性在 CI 里由
-``node tools/make-demo.mjs --check`` 单独兜。
-"""
-
 from __future__ import annotations
 
 from pathlib import Path

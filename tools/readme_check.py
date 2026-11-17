@@ -1,30 +1,10 @@
-"""README 文档质量校验：双语覆盖 / 相对链接 / 图片存在 / demo.svg 最新。
-
-对应 issue #013：把"文档质量没有门禁"补上。原先的双语检查是 skill 目录里的第三方
-脚本，这里没有复制它，而是按本仓库自己的 README 约定从头实现，避免许可与来源问题。
-
-结构解析用 ``markdown-it-py``（成熟 Markdown 解析器），不手写正则去猜标题 / 链接 /
-图片；语言覆盖判定仍基于原文行。
-
-校验的四件事：
-
-1. **双语覆盖** —— 每个 ``##`` 小节标题与正文都要同时有中文与英文，缺哪边就报哪边；
-2. **相对链接** —— ``[text](url)`` 里指向本地的 url 必须真实存在；
-3. **图片存在** —— ``![alt](url)`` 与 ``<img src="...">`` 里的本地图片必须存在；
-4. **demo.svg 最新** —— 跑 ``node tools/make-demo.mjs --check``。
-
-用法：:
-
-    python tools/readme_check.py        # 从仓库根跑，退出码 0=通过 / 1=有问题
-
-这个模块被 ``selfhost.mcp_repo.run_readme_check`` 复用，不在这里放任何网关逻辑。
-"""
-
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -38,12 +18,21 @@ _LATIN = re.compile(r"[A-Za-z]")
 # 带协议 / 锚点 / 协议相对引用的 url 不做本地存在性检查。
 _EXTERNAL = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|#|//)")
 
-# 裸 ``<img src="...">``（块级或行内 HTML）里的 src。
-_IMG_SRC = re.compile(r"<img[^>]+src=[\"']([^\"']+)[\"']", re.IGNORECASE)
-
 _DEMO_SVG = "assets/demo/demo.svg"
 
 Problem = dict[str, object]
+
+
+class _HTMLImages(HTMLParser):
+    def __init__(self, markup: str) -> None:
+        super().__init__()
+        self.sources: list[str] = []
+        self.feed(markup)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "img" and (src := dict(attrs).get("src")):
+            self.sources.append(src)
 
 
 def _is_external(url: str) -> bool:
@@ -96,12 +85,10 @@ def _refs(text: str) -> list[tuple[int, str, str]]:
                     if src:
                         refs.append((line, src, "image"))
                 elif child.type == "html_inline":
-                    for m in _IMG_SRC.finditer(child.content):
-                        refs.append((line, m.group(1), "image"))
+                    refs.extend((line, src, "image") for src in _HTMLImages(child.content).sources)
         elif tok.type == "html_block":
             line = tok.map[0] + 1 if tok.map else 1
-            for m in _IMG_SRC.finditer(tok.content):
-                refs.append((line, m.group(1), "image"))
+            refs.extend((line, src, "image") for src in _HTMLImages(tok.content).sources)
     return refs
 
 
@@ -187,6 +174,7 @@ def check_demo(root: Path) -> dict[str, object]:
         proc = subprocess.run(
             ["node", str(script), "--check"],
             cwd=root,
+            env={**os.environ, "PYTHON": sys.executable},
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -198,7 +186,8 @@ def check_demo(root: Path) -> dict[str, object]:
         return {"status": "skipped", "message": "本机没有 node，无法校验 demo.svg 是否最新"}
     if proc.returncode == 0:
         return {"status": "fresh", "message": None}
-    return {"status": "stale", "message": "已过期，请跑：node tools/make-demo.mjs"}
+    detail = (proc.stderr or proc.stdout).strip()
+    return {"status": "failed", "message": detail or f"生成器返回退出码 {proc.returncode}"}
 
 
 def check_readme(root: Path, *, run_demo_check: bool = True) -> dict[str, object]:

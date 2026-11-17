@@ -50,20 +50,17 @@ python -m selfhost.loop               # 全跑（约 40s，含一次完整测试
 
 - **工具侧**：默认 dry-run；路径只许仓库内的 `capgate/ tests/ docs/ envs/ capabilities/`，
   `../`、绝对路径、`selfhost/`、`README.md`、符号链接一律拒绝；
-- **操作者批准侧**：进程只在启动时通过 `CAPGATE_SELFHOST_APPROVED_PATCH` 收到一个
-  **已审 patch 产物路径**。正式写入要求 `allow_write=true`，且当前动作的 `path`、`diff`、
-  前置状态（`old_sha256`）都与该产物一致——模型自己点 `allow_write=true` 没用，
-  进程没收到批准就拒绝落盘。
+- **操作者批准**。进程启动时从 `CAPGATE_SELFHOST_APPROVED_PATCH` 读取人工审核后的
+  `patch` 产物。正式写入要求 `allow_write=true`，文件路径、diff、修改前后的哈希均须与
+  该产物一致。已配置的批准文件无法读取或不符合格式时，MCP 服务启动失败并报告原因。
 
-`apply_patch` 的 diff 用 `unidiff` 校验只改所声明的一个文件，再用 `git apply` 在隔离
-目录生成新内容（不手写 parser）；真实仓库只做同目录临时文件 + 原子替换，过期 / 上下文
-对不上 / 多文件 diff 一律拒绝。原始执行理由（`reason`）随 `patch` 产物与账本保留。
+`apply_patch` 用 `unidiff` 检查声明的文件，再在工作区的 `var/selfhost-patches/` 下隔离
+应用 diff。正式写入通过同目录的原子替换完成。`patch` 产物记录 diff、修改前后的哈希和执行理由。
 
-目标根目录可用 `CAPGATE_SELFHOST_ROOT` 覆盖（默认取本仓库根），这是测试和换机复用的
-正常入口。**谁 review、怎么回滚**：`repo-fix` 没有任务卡，不会进默认循环，只能人工
-显式触发；patch 产物是统一 diff，`git apply -R` 就是回滚；review 走正常 PR 流程——
-先跑一次 dry-run 产出 diff，人看 diff、批准、再跑一次才真正写。没有这条批准链，
-它就是个会自动搞坏仓库的脚本。
+`CAPGATE_SELFHOST_ROOT` 指定目标仓库，默认使用本仓库。操作者先显式发起 `repo-fix` 的
+dry-run 并审核 `patch` 产物中的 diff，批准后再发起正式写入。需要恢复时，操作者通过
+`capgate chain <task_id> --root selfhost` 找到原任务的 `patch` 产物，对照其中的 diff 用文件
+编辑工具手动恢复文件。
 
 ## 一个踩过的坑（值得记住）
 

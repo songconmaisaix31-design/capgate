@@ -1,15 +1,9 @@
-"""受限写入能力（issue #014）的复核版测试。
-
-不走 mock：每个用例都用一个**真实独立 Git 仓库**当目标，通过真实网关（真实 stdio
-MCP 子进程）跑实际的 ``repo-fix`` 任务。目标根目录用环境变量 ``CAPGATE_SELFHOST_ROOT``
-传给子进程，操作者批准用 ``CAPGATE_SELFHOST_APPROVED_PATCH`` 传给子进程——都是正常
-生产入口，不是打补丁。diff 应用用真实 ``git apply`` 在隔离目录生成新内容。
-"""
-
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -98,6 +92,31 @@ async def test_allow_write_without_approval_rejected(selfhost_system, isolated_r
     assert target.read_text(encoding="utf-8") == INITIAL
 
 
+@pytest.mark.parametrize("configured_file", ["absent", "schema"])
+def test_invalid_configured_approval_fails_at_startup(tmp_path, configured_file):
+    approval = (
+        SELF / "schemas" / "patch.schema.json"
+        if configured_file == "schema"
+        else tmp_path / "unavailable-approval.json"
+    )
+    process = subprocess.run(
+        [sys.executable, "-m", "selfhost.mcp_repo"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "CAPGATE_SELFHOST_APPROVED_PATCH": str(approval),
+            "PYTHONIOENCODING": "utf-8",
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+    )
+    assert process.returncode != 0
+    assert "批准产物无法读取或不符合格式" in process.stderr
+
+
 async def test_approved_write_executes_and_is_traceable(tmp_path, monkeypatch, isolated_repo):
     # 1. dry-run 产出 patch 产物（path / diff / old_sha256）
     s1 = build(SELF, RouterConfig(strategy="static"), state=tmp_path / "s1")
@@ -184,6 +203,13 @@ async def test_out_of_bounds_rejected(selfhost_system, isolated_repo):
 def test_apply_patch_safely_single_file_roundtrip():
     diff = "--- a/capgate/foo.py\n+++ b/capgate/foo.py\n@@ -1,3 +1,4 @@\n a\n b\n c\n+d\n"
     assert repo._apply_patch_safely("capgate/foo.py", INITIAL, diff) == NEXT
+
+
+def test_apply_patch_safely_preserves_final_newline_change():
+    target = "capgate/foo.py"
+    changed = INITIAL.rstrip("\n")
+    diff = repo._unified_diff(target, INITIAL, changed)
+    assert repo._apply_patch_safely(target, INITIAL, diff) == changed
 
 
 def test_apply_patch_safely_rejects_multi_file():

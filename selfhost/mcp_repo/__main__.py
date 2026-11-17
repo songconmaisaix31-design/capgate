@@ -7,7 +7,7 @@
    ``capgate/ tests/ docs/ envs/ capabilities/``，越界 / 绝对路径 / 符号链接一律拒绝。
 2. 操作者批准侧：进程只在启动时通过 ``CAPGATE_SELFHOST_APPROVED_PATCH`` 收到一个
    **已审 patch 产物路径**；正式写入要求 allow_write、且当前动作的 path / diff /
-   前置状态（old_sha256）都与该产物一致。进程没收到批准就拒绝落盘——模型自己点
+   修改前后的文件哈希都与该产物一致。进程没收到批准就拒绝落盘——模型自己点
    ``allow_write=true`` 没用。
 
 原始执行理由（reason）随 patch 产物与账本保留。放在 selfhost/ 里，不从主包导出。
@@ -18,7 +18,6 @@ from __future__ import annotations
 import contextlib
 import difflib
 import hashlib
-import json
 import os
 import re
 import subprocess
@@ -27,14 +26,22 @@ import tempfile
 from pathlib import Path
 
 import unidiff
-from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from tools.readme_check import check_readme, format_problems
+
+from capgate.mcp.server import create_server
+from capgate.mcp.transport import sdk_major
+
+if sdk_major() == 2:
+    from mcp.server.mcpserver.exceptions import ToolError
+else:
+    from mcp.server.fastmcp.exceptions import ToolError
 
 _default_root = Path(__file__).resolve().parents[2]
 _root_env = os.environ.get("CAPGATE_SELFHOST_ROOT", "").strip()
 ROOT = Path(_root_env).resolve() if _root_env else _default_root
 
-mcp = FastMCP("capgate-repo")
+mcp = create_server("capgate-repo")
 
 # 写入白名单：只允许这些顶层目录。README.md / selfhost/ / .github/ 都不在列——
 # 不能让网关改"检查它自己的检查"，也不能改引导它自己的 selfhost。
@@ -81,7 +88,10 @@ def run_tests(include_integration: bool = False) -> dict:
     args = [sys.executable, "-m", "pytest", "-q"]
     if not include_integration:
         args += ["-m", "not integration"]
-    result = _run(args)
+    state = _default_root / "var"
+    state.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=state, prefix="selfhost-tests-") as scratch:
+        result = _run([*args, "--basetemp", str(Path(scratch) / "pytest")])
     output = result["stdout"] + result["stderr"]
     passed = re.search(r"(\d+) passed", output)
     failed = re.search(r"(\d+) failed", output)
@@ -147,7 +157,7 @@ def run_readme_check() -> dict:
     """
     report = check_readme(ROOT)
     if not report["ok"]:
-        raise RuntimeError(format_problems(list(report["problems"])))
+        raise ToolError(format_problems(list(report["problems"])))
     return report
 
 
@@ -162,28 +172,32 @@ def _check_write_path(path: str) -> Path:
     """把写入路径解析到仓库内的白名单目录；越界、绝对路径、符号链接一律拒绝。"""
     p = Path(path)
     if p.is_absolute():
-        raise ValueError(f"写入被拒绝：{path!r} 是绝对路径，只接受仓库内的相对路径")
+        raise ToolError(f"写入被拒绝：{path!r} 是绝对路径，只接受仓库内的相对路径")
     # 路径里任何已存在的组件是符号链接都拒绝——写入不能穿过未授权的跳转。
     probe = ROOT
     for part in p.parts:
         probe = probe / part
         if probe.is_symlink():
-            raise ValueError(f"写入被拒绝：{path!r} 含符号链接组件 {part!r}")
+            raise ToolError(f"写入被拒绝：{path!r} 含符号链接组件 {part!r}")
     resolved = probe.resolve()
     if not resolved.is_relative_to(ROOT):
-        raise ValueError(f"写入被拒绝：{path!r} 越出仓库根目录")
+        raise ToolError(f"写入被拒绝：{path!r} 越出仓库根目录")
     rel = resolved.relative_to(ROOT)
     if not rel.parts or rel.parts[0] not in WRITE_WHITELIST:
-        raise ValueError(f"写入被拒绝：{path!r} 不在白名单目录（{'、'.join(WRITE_WHITELIST)}）")
+        raise ToolError(f"写入被拒绝：{path!r} 不在白名单目录（{'、'.join(WRITE_WHITELIST)}）")
     return resolved
 
 
 def _unified_diff(rel: str, old: str, new: str) -> str:
-    """用标准库 difflib 生成统一 diff（生成，不是解析）。"""
-    return "\n".join(
-        difflib.unified_diff(
-            old.splitlines(), new.splitlines(), fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm=""
-        )
+    """用标准库 difflib 生成统一 diff，保留文件的换行变化。"""
+    lines = difflib.unified_diff(
+        old.splitlines(keepends=True),
+        new.splitlines(keepends=True),
+        fromfile=f"a/{rel}",
+        tofile=f"b/{rel}",
+    )
+    return "".join(
+        line if line.endswith("\n") else f"{line}\n\\ No newline at end of file\n" for line in lines
     )
 
 
@@ -203,25 +217,29 @@ def _apply_patch_safely(rel: str, old: str, diff: str) -> str:
     if declared != rel:
         raise ValueError(f"diff 声明的文件 {declared!r} 与目标 {rel!r} 不一致")
 
-    with tempfile.TemporaryDirectory() as tmp:
+    scratch = _default_root / "var" / "selfhost-patches"
+    scratch.mkdir(parents=True, exist_ok=True)
+    git_env = {
+        key: value for key, value in os.environ.items() if key not in {"GIT_DIR", "GIT_WORK_TREE"}
+    }
+    git_env["GIT_CEILING_DIRECTORIES"] = str(scratch)
+    with tempfile.TemporaryDirectory(dir=scratch) as tmp:
         tmpdir = Path(tmp)
         work = tmpdir / rel
         work.parent.mkdir(parents=True, exist_ok=True)
-        work.write_text(old, encoding="utf-8")
+        work.write_bytes(old.encode("utf-8"))
         proc = subprocess.run(
-            ["git", "apply", "--whitespace=nowarn"],
+            ["git", "-c", "core.autocrlf=false", "apply", "--whitespace=nowarn"],
             cwd=tmpdir,
-            input=diff,
+            env=git_env,
+            input=diff.encode("utf-8"),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=120,
         )
         if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()
+            detail = (proc.stderr or proc.stdout).decode("utf-8", errors="replace").strip()
             raise ValueError(f"git apply 失败：{detail or 'diff 无法应用'}")
-        return work.read_text(encoding="utf-8")
+        return work.read_bytes().decode("utf-8")
 
 
 def _atomic_write(target: Path, content: str) -> None:
@@ -238,46 +256,46 @@ def _atomic_write(target: Path, content: str) -> None:
         raise
 
 
-# 操作者在进程启动时通过环境变量指定的已审 patch 产物。
-_APPROVED: dict | None = None
-_APPROVAL_ERROR = ""
+class PatchApproval(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    path: str = Field(min_length=1)
+    diff: str
+    old_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    new_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-def _load_approval() -> None:
-    global _APPROVED, _APPROVAL_ERROR
+def _load_approval() -> PatchApproval | None:
     raw = os.environ.get("CAPGATE_SELFHOST_APPROVED_PATCH", "").strip()
     if not raw:
-        return
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = ROOT / path
     try:
-        p = Path(raw)
-        if not p.is_absolute():
-            p = ROOT / p
-        _APPROVED = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        _APPROVAL_ERROR = f"批准产物无法读取：{exc}"
+        return PatchApproval.model_validate_json(path.read_bytes())
+    except (OSError, ValidationError) as exc:
+        raise ValueError(f"批准产物无法读取或不符合格式：{path}：{exc}") from exc
 
 
-_load_approval()
+_APPROVED = _load_approval()
 
 
-def _require_approval(rel: str, diff: str, old_sha: str) -> None:
+def _require_approval(rel: str, diff: str, old_sha: str, new_sha: str) -> None:
     """正式写入必须匹配进程持有的已审 patch 产物，否则拒绝。"""
-    if _APPROVAL_ERROR:
-        raise ValueError(f"写入被拒绝：{_APPROVAL_ERROR}")
     if _APPROVED is None:
-        raise ValueError(
+        raise ToolError(
             "写入被拒绝：进程没有收到已审 patch 批准"
             "（设置 CAPGATE_SELFHOST_APPROVED_PATCH 指向已审产物）"
         )
-    if _APPROVED.get("path") != rel:
-        raise ValueError(
-            f"写入被拒绝：批准产物的 path 与当前动作不一致"
-            f"（批准 {_APPROVED.get('path')!r}，当前 {rel!r}）"
+    if _APPROVED.path != rel:
+        raise ToolError(
+            f"写入被拒绝：批准产物的 path 与当前动作不一致（批准 {_APPROVED.path!r}，当前 {rel!r}）"
         )
-    if _APPROVED.get("old_sha256") != old_sha:
-        raise ValueError("写入被拒绝：文件前置状态已变化，旧 patch 已过期")
-    if _APPROVED.get("diff") != diff:
-        raise ValueError("写入被拒绝：批准产物的 diff 与当前动作不一致")
+    if _APPROVED.old_sha256 != old_sha:
+        raise ToolError("写入被拒绝：文件前置状态已变化，旧 patch 已过期")
+    if _APPROVED.diff != diff or _APPROVED.new_sha256 != new_sha:
+        raise ToolError("写入被拒绝：批准产物的 diff 与当前动作不一致")
 
 
 def _patch_result(
@@ -303,12 +321,12 @@ def write_file(path: str, content: str, allow_write: bool = False, reason: str =
     """
     target = _check_write_path(path)
     rel = target.relative_to(ROOT).as_posix()
-    old = target.read_text(encoding="utf-8") if target.exists() else ""
+    old = target.read_bytes().decode("utf-8") if target.exists() else ""
     new = content
     changed = old != new
     wrote = False
     if allow_write:
-        _require_approval(rel, _unified_diff(rel, old, new), _sha256(old))
+        _require_approval(rel, _unified_diff(rel, old, new), _sha256(old), _sha256(new))
         if changed:
             _atomic_write(target, new)
             wrote = True
@@ -323,13 +341,16 @@ def apply_patch(path: str, diff: str, allow_write: bool = False, reason: str = "
     """
     target = _check_write_path(path)
     rel = target.relative_to(ROOT).as_posix()
-    old = target.read_text(encoding="utf-8") if target.exists() else ""
-    new = _apply_patch_safely(rel, old, diff)
+    old = target.read_bytes().decode("utf-8") if target.exists() else ""
+    try:
+        new = _apply_patch_safely(rel, old, diff)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
     unified = _unified_diff(rel, old, new)
     changed = old != new
     wrote = False
     if allow_write:
-        _require_approval(rel, unified, _sha256(old))
+        _require_approval(rel, unified, _sha256(old), _sha256(new))
         if changed:
             _atomic_write(target, new)
             wrote = True
