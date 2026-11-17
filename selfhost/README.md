@@ -24,12 +24,14 @@ selfhost/
 
 ```bash
 python -m selfhost.loop --list        # 看有哪些任务
-python -m selfhost.loop --only T03    # 只跑一条（开盘梳理，约 0.2s）
-python -m selfhost.loop --only T04    # 只跑文档校验（含 demo.svg 最新性，约 16s）
-python -m selfhost.loop               # 全跑（约 40s，含一次完整测试 + 文档校验）
+python -m selfhost.loop --only T02    # 跑全部非集成测试
+python -m selfhost.loop --only T03    # 梳理待办事项
+python -m selfhost.loop --only T04    # 校验 README 和 demo.svg
+python -m selfhost.loop               # 跑全部质量检查
 ```
 
-退出码：全绿才是 0。可以直接当 CI 门禁。
+所有检查通过时退出码为 0。Ruff 或 pytest 返回非零时，失败原因进入任务账本。
+pytest 子进程的时限为 600 秒，MCP 调用与任务分别保留 10 秒和 20 秒处理返回结果。
 
 ## 它证明了什么
 

@@ -65,6 +65,7 @@ class CapabilityVersion(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     tools: list[str] = Field(default_factory=list)  # 允许暴露的工具白名单
     startup_timeout: float = 60.0  # 冷启动上限；Node 系 MCP 可能很慢
+    call_timeout: float = Field(default=60.0, gt=0, allow_inf_nan=False)
 
 
 class Capability(BaseModel):

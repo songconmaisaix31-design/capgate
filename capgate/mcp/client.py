@@ -16,8 +16,6 @@ from mcp.types import CallToolResult, Tool
 from ..models import CapabilityVersion
 from .transport import MCPTransport, open_transport
 
-DEFAULT_TIMEOUT = 60.0
-
 
 class MCPError(RuntimeError):
     pass
@@ -136,16 +134,21 @@ class MCPConnection:
         return out
 
     async def call(
-        self, name: str, arguments: dict[str, Any], timeout_s: float = DEFAULT_TIMEOUT
+        self, name: str, arguments: dict[str, Any], timeout_s: float | None = None
     ) -> Any:
         if not self._session:
             raise MCPError(f"MCP 未就绪（{self.label}）")
         if name not in self._tools:
             raise MCPError(f"{self.label} 没有工具 {name!r}（可用：{sorted(self._tools)}）")
+        limit = self.spec.call_timeout if timeout_s is None else timeout_s
         async with self._sem:
-            result = await asyncio.wait_for(
-                self._session.call_tool(name, arguments or {}), timeout=timeout_s
-            )
+            deadline = asyncio.timeout(limit)
+            try:
+                async with deadline:
+                    result = await self._session.call_tool(name, arguments or {})
+            except TimeoutError as exc:
+                detail = f"响应超时（{limit:g}s）" if deadline.expired() else f"工具调用超时：{exc}"
+                raise MCPError(f"{self.label}.{name} {detail}") from exc
         if getattr(result, "is_error", False) or getattr(result, "isError", False):
             raise MCPError(f"{self.label}.{name} 返回错误：{_normalize(result)}")
         return _normalize(result)

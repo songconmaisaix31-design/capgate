@@ -49,16 +49,19 @@ WRITE_WHITELIST = ("capgate", "tests", "docs", "envs", "capabilities")
 
 
 def _run(args: list[str], timeout: int = 600) -> dict:
-    proc = subprocess.run(
-        args,
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,  # 绝不能继承 MCP 的 stdio 管道
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,  # 绝不能继承 MCP 的 stdio 管道
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ToolError(f"仓库子命令执行超时（{timeout}s）") from exc
     return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 
 
@@ -72,6 +75,8 @@ def run_lint() -> dict:
     """对仓库跑 ruff check，返回错误数与摘要。"""
     result = _run([sys.executable, "-m", "ruff", "check", ".", "--output-format", "concise"])
     output = result["stdout"] + result["stderr"]
+    if result["exit_code"] != 0:
+        raise ToolError(f"Ruff 退出码 {result['exit_code']}\n{_tail(output, 20)}")
     match = re.search(r"Found (\d+) error", output)
     return {
         "ok": result["exit_code"] == 0,
@@ -93,6 +98,8 @@ def run_tests(include_integration: bool = False) -> dict:
     with tempfile.TemporaryDirectory(dir=state, prefix="selfhost-tests-") as scratch:
         result = _run([*args, "--basetemp", str(Path(scratch) / "pytest")])
     output = result["stdout"] + result["stderr"]
+    if result["exit_code"] != 0:
+        raise ToolError(f"pytest 退出码 {result['exit_code']}\n{_tail(output, 20)}")
     passed = re.search(r"(\d+) passed", output)
     failed = re.search(r"(\d+) failed", output)
     return {

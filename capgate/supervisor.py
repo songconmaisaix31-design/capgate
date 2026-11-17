@@ -130,13 +130,15 @@ class Supervisor:
             )
             started = time.monotonic()
             token = current_stream.set(stream)
+            deadline = asyncio.timeout(ctx.budget_s)
             try:
-                output = await asyncio.wait_for(
-                    adapter.run(ctx), timeout=float(budget_s or task.budget_s)
-                )
+                async with deadline:
+                    output = await adapter.run(ctx)
             except TimeoutError as exc:
                 await self.release(inst, env, keep=False)
-                raise AgentError(f"env {env.id} 执行超时（{budget_s or task.budget_s}s）") from exc
+                if not deadline.expired():
+                    raise
+                raise AgentError(f"env {env.id} 执行超时（{ctx.budget_s}s）") from exc
             except BaseException:
                 await self.release(inst, env, keep=False)
                 raise

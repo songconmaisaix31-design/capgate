@@ -46,7 +46,7 @@ def load_tasks(only: list[str] | None = None) -> list[TaskSpec]:
                 type=str(meta.get("type") or "general"),
                 tags=[str(t) for t in meta.get("tags") or []],
                 inputs={"task_file": path.name},
-                budget_s=600,
+                budget_s=620,
             )
         )
     return tasks
