@@ -22,7 +22,9 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .models import TaskSpec
+from .pins import PinError, set_pin
 from .system import System
+from .taxonomy import TaxonomyError
 
 DASHBOARD = Path(__file__).with_name("static") / "dashboard.html"
 
@@ -48,6 +50,10 @@ class OutcomeIn(BaseModel):
     quality: float | None = None
     human_edits: int = 0
     note: str | None = None
+
+
+class PinIn(BaseModel):
+    env: str = Field(min_length=1)
 
 
 class RerunReceipt(BaseModel):
@@ -156,21 +162,27 @@ def create_app(system: System) -> FastAPI:
             str | None, Header(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
         ] = None,
     ) -> dict[str, Any]:
-        spec = TaskSpec(**body.model_dump())
-        if idempotency_key is None:
-            system.ledger.add_task(spec)
-        else:
+        try:
+            spec = system.orchestrator.prepare_task(TaskSpec(**body.model_dump()))
+        except TaxonomyError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if idempotency_key is not None:
             spec.id = f"task_{uuid5(NAMESPACE_URL, f'capgate:tasks:{idempotency_key}').hex}"
-            if not system.ledger.reserve_task(spec):
-                existing = system.ledger.task(spec.id)
-                if existing is None or TaskSpec.model_validate_json(existing["spec"]) != spec:
-                    raise HTTPException(409, "此 Idempotency-Key 已用于另一份任务规格")
-                return {"id": spec.id, "status": existing["status"]}
+        if not system.ledger.reserve_task(spec):
+            existing = system.ledger.task(spec.id)
+            if existing is None:
+                raise HTTPException(409, "任务预留失败")
+            previous = TaskSpec.model_validate_json(existing["spec"])
+            if previous.model_dump(exclude={"taxonomy_version"}) != spec.model_dump(
+                exclude={"taxonomy_version"}
+            ):
+                raise HTTPException(409, "此 Idempotency-Key 已用于另一份任务规格")
+            return {"id": spec.id, "status": existing["status"]}
 
         async def runner() -> None:
             # 失败已经落账；这里只保证后台任务不把异常抛到事件循环外面
             with contextlib.suppress(Exception):
-                await system.orchestrator.run(spec)
+                await system.orchestrator.run(spec, reserved=True)
 
         job = asyncio.create_task(runner())
         app.state.jobs.add(job)
@@ -189,6 +201,26 @@ def create_app(system: System) -> FastAPI:
             note=body.note,
         )
         return {"ok": True}
+
+    @app.post("/api/tasks/{task_id}/pin")
+    async def pin_env(task_id: str, body: PinIn) -> dict[str, Any]:
+        task = system.ledger.task(task_id)
+        if task is None:
+            raise HTTPException(404, "任务不存在")
+        env = body.env.strip()
+        if env not in system.registry or all(
+            run["env_id"] != env for run in system.ledger.runs(task_id)
+        ):
+            raise HTTPException(422, "所选环境必须已注册并在该任务中运行过")
+        task_type = task["task_type"]
+        try:
+            if system.taxonomy is not None:
+                task_type = system.taxonomy.normalize_type(task_type)
+            pins = set_pin(system.paths.root, task_type, env=env)
+        except (PinError, TaxonomyError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        system.router.config.pins = pins
+        return {"ok": True, "task_type": task_type, "env": env}
 
     @app.post("/api/tasks/{task_id}/rerun")
     async def request_rerun(

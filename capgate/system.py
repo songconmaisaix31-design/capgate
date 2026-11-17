@@ -18,6 +18,7 @@ from .orchestrator import Orchestrator
 from .pool import Pool
 from .router import LLMJudge, Router, RouterConfig
 from .supervisor import Supervisor
+from .taxonomy import Taxonomy
 
 
 @dataclass
@@ -32,6 +33,10 @@ class System:
     supervisor: Supervisor
     orchestrator: Orchestrator
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def taxonomy(self) -> Taxonomy | None:
+        return self.orchestrator.taxonomy
 
     async def aclose(self) -> None:
         await self.supervisor.aclose()
@@ -68,13 +73,20 @@ def build(
     p = resolve_paths(root, state)
     pool = Pool(p.capabilities).load()
     registry = EnvRegistry(p.envs).load()
+    taxonomy_path = p.root / "taxonomy.yaml"
+    taxonomy = None
+    if taxonomy_path.exists():
+        taxonomy = Taxonomy.load(taxonomy_path, env_tags=registry.all())
+        taxonomy = taxonomy.with_environment_tags([("公共", ["general"])])
+        for env in registry.all():
+            env.tags = taxonomy.normalize_tags(env.tags, strict=True)
     ledger = Ledger(p.db)
     store = ArtifactStore(p.artifacts, p.schemas)
     hub = MCPHub()
     config = router_config or load_router_config(p.root)
     router = Router(ledger, registry, config, judge=judge)
     supervisor = Supervisor(pool, hub)
-    orchestrator = Orchestrator(ledger, store, router, supervisor, registry)
+    orchestrator = Orchestrator(ledger, store, router, supervisor, registry, taxonomy=taxonomy)
     return System(
         paths=p,
         pool=pool,

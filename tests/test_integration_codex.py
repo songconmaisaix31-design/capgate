@@ -49,6 +49,7 @@ def test_codex_public_task_through_http(repo_root: Path, tmp_path: Path) -> None
         try:
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=5) as client:
                 chain = _run_public_task(client, process, source)
+                perf = client.get("/api/stats").raise_for_status().json()["perf"]
         finally:
             process.terminate()
             process.wait(timeout=10)
@@ -67,6 +68,10 @@ def test_codex_public_task_through_http(repo_root: Path, tmp_path: Path) -> None
     )
     run = chain["runs"][0]
     assert (run["adapter"], run["model"], run["status"]) == ("cli", "gpt-6.1-sol", "ok")
+    usage = json.loads(run["meta"])["usage"]
+    (record,) = perf
+    assert record["avg_tokens"] == usage["input_tokens"] + usage["output_tokens"] > 0
+    assert record["avg_cost"] is None
     events = [event for event in chain["events"] if event["kind"].startswith("codex.")]
     thread_id = next(event for event in events if event["kind"] == "codex.thread.started")[
         "payload"

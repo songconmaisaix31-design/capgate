@@ -37,6 +37,8 @@ def _register(system, *envs: EnvManifest) -> None:
     for index, env in enumerate(envs):
         env.prior = float(len(envs) - index)
     system.registry.envs = {env.id: env for env in envs}
+    assert system.taxonomy is not None
+    system.orchestrator.taxonomy = system.taxonomy.with_environment_tags(envs)
 
 
 def _task(**kwargs) -> TaskSpec:

@@ -15,6 +15,7 @@ from . import __version__, demo, render
 from .config import paths as resolve_paths
 from .models import TaskSpec
 from .system import System, build, load_router_config
+from .taxonomy import TaxonomyError, overlapping_pairs
 
 app = typer.Typer(add_completion=False, help="capgate —— 本地能力网关")
 console = Console()
@@ -60,7 +61,7 @@ def doctor(root: str = typer.Option(None, "--root", help="仓根目录（默认�
 
         console.print(f"[bold]mcp[/bold] {md.version('mcp')}")
     except Exception:
-        console.print("[red]mcp 未安装[/red]（pip install 'mcp>=1.2,<2'）")
+        console.print("[red]mcp 未安装[/red]（pip install 'capgate[mcp]' 或 'capgate[mcp-v2]'）")
 
     system = build(p.root)
     console.print(
@@ -87,6 +88,13 @@ def envs(root: str = typer.Option(None, "--root")) -> None:
     """列出领域环境。"""
     system = _system(root)
     render.envs_table(system.registry, console)
+    if system.taxonomy is not None:
+        for pair in overlapping_pairs(system.registry.all(), system.taxonomy):
+            console.print(
+                f"{pair.a} 与 {pair.b} 共享标签 {'、'.join(pair.shared)}"
+                f"（重叠度 {pair.jaccard:.0%}）",
+                markup=False,
+            )
     system.ledger.close()
 
 
@@ -236,6 +244,12 @@ def solve(
                 render.result_panel(result, console)
                 render.artifacts_view(result, console)
             return 0 if result.status == "ok" else 1
+        except TaxonomyError as exc:
+            if as_json:
+                emit_json({"error": str(exc)})
+            else:
+                console.print(str(exc), style="red", markup=False)
+            return 1
         finally:
             await system.aclose()
 

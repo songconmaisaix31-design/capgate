@@ -74,6 +74,7 @@ pin 端点由服务端从任务历史取 `task_type`、用 Registry 校验 `env`
 ```python
 # 示意：server 装配处
 from .pins import set_pin
+
 pins = set_pin(system.paths.root, task_type, env=env)
 system.router.config.pins = pins
 ```

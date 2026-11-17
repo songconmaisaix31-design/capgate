@@ -12,6 +12,8 @@ import asyncio
 import time
 from typing import Any
 
+from .agents.base import AgentError
+from .agents.openai_compat import _total_usage
 from .artifacts import ArtifactStore
 from .envs import EnvRegistry
 from .ledger import Ledger
@@ -27,6 +29,7 @@ from .models import (
 )
 from .router import Router
 from .supervisor import Supervisor, should_keep_warm
+from .taxonomy import Taxonomy
 
 MAX_ENVS_PER_TASK = 8
 MAX_ALT_RETRIES = 2
@@ -44,18 +47,35 @@ class Orchestrator:
         router: Router,
         supervisor: Supervisor,
         registry: EnvRegistry,
+        *,
+        taxonomy: Taxonomy | None = None,
     ) -> None:
         self.ledger = ledger
         self.store = store
         self.router = router
         self.supervisor = supervisor
         self.registry = registry
+        self.taxonomy = taxonomy
 
     # ---------------------------------------------------------------- 主流程
 
-    async def run(self, task: TaskSpec) -> TaskResult:
+    def prepare_task(self, task: TaskSpec) -> TaskSpec:
+        if self.taxonomy is None:
+            return task
+        return task.model_copy(
+            update={
+                "tags": self.taxonomy.normalize_tags(task.tags, strict=True),
+                "type": self.taxonomy.normalize_type(task.type),
+                "taxonomy_version": self.taxonomy.version,
+            }
+        )
+
+    async def run(self, task: TaskSpec, *, reserved: bool = False) -> TaskResult:
+        if not reserved:
+            task = self.prepare_task(task)
+            if not self.ledger.reserve_task(task):
+                raise ValueError(f"任务 {task.id!r} 已存在")
         started = time.monotonic()
-        self.ledger.add_task(task)
         self.ledger.event(
             task.id,
             "task.start",
@@ -64,7 +84,7 @@ class Orchestrator:
         result = TaskResult(task=task, status="ok")
 
         try:
-            self._route_and_plan(task, result)
+            await self._route_and_plan(task, result)
             if not result.decisions[-1].chosen:
                 raise RuntimeError("没有任何 env 能承接这个任务")
 
@@ -91,8 +111,11 @@ class Orchestrator:
 
     # ---------------------------------------------------------------- 选路与编排计划
 
-    def _route_and_plan(self, task: TaskSpec, result: TaskResult) -> None:
-        domain = self.router.route_domains(task)
+    async def _route_and_plan(self, task: TaskSpec, result: TaskResult) -> None:
+        domain = await self.router.route_domains_async(
+            task,
+            on_judge=lambda payload: self.ledger.event(task.id, "routing.llm_judge", payload),
+        )
         self.ledger.decide(task.id, domain)
         result.decisions.append(domain)
         if not domain.chosen:
@@ -291,10 +314,22 @@ class Orchestrator:
         rate = (sum(r["wins"] for r in rec) / sum(r["n"] for r in rec)) if rec else 0.0
         samples = sum(r["n"] for r in rec)
 
-        on_event = lambda kind, payload: self.ledger.event(  # noqa: E731
-            task.id, kind, payload, env_id=env.id
-        )
+        requests: list[dict[str, Any]] = []
 
+        def on_event(kind: str, payload: dict[str, Any]) -> None:
+            self.ledger.event(task.id, kind, payload, env_id=env.id)
+            if kind == "llm.usage":
+                requests.append(
+                    {
+                        field: value
+                        for field, value in payload.items()
+                        if field not in {"run_id", "turn", "model"}
+                    }
+                )
+
+        started = time.monotonic()
+        execution = None
+        artifacts: list[Artifact] = []
         try:
             execution = await self.supervisor.execute(
                 env=env,
@@ -304,9 +339,19 @@ class Orchestrator:
                 run_id=run_id,
                 on_event=on_event,
             )
+            for name, payload in execution.output.artifacts.items():
+                artifact = self.store.put(task.id, name, payload, env_id=env.id, run_id=run_id)
+                self.ledger.add_artifact(task.id, artifact)
+                artifacts.append(artifact)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if execution is not None:
+                usage = execution.output.usage
+            elif isinstance(exc, AgentError) and exc.usage:
+                usage = exc.usage
+            else:
+                usage = _total_usage(requests)
             run = RunResult(
                 task_id=task.id,
                 env_id=env.id,
@@ -314,21 +359,32 @@ class Orchestrator:
                 status="failed",
                 adapter=env.agent.adapter,
                 model=model,
+                artifacts=artifacts,
+                latency_ms=int((time.monotonic() - started) * 1000),
                 error=str(exc),
+                trace=execution.output.trace if execution is not None else [],
             )
-            self.ledger.finish_run(run, meta={"error": str(exc), "resolved": _versions(env)})
+            self.ledger.finish_run(
+                run,
+                meta={
+                    "error": str(exc),
+                    "resolved": (
+                        execution.resolved_versions if execution is not None else _versions(env)
+                    ),
+                    "usage": usage,
+                    "summary": execution.output.text if execution is not None else "",
+                },
+            )
             self.ledger.event(task.id, "env.failed", {"error": str(exc)}, env_id=env.id)
             result.runs.append(run)
+            result.artifacts.extend(artifacts)
+            if execution is not None:
+                raise
             return run
 
-        artifacts: list[Artifact] = []
         declared = _names(env.artifacts.produces)
         emitted = set(execution.output.artifacts)
-        for name, payload in execution.output.artifacts.items():
-            artifact = self.store.put(task.id, name, payload, env_id=env.id, run_id=run_id)
-            self.ledger.add_artifact(task.id, artifact)
-            artifacts.append(artifact)
-            payloads[name] = payload
+        payloads.update(execution.output.artifacts)
 
         missing = declared - emitted
         status: str = "ok" if not missing else "degraded"
@@ -349,6 +405,7 @@ class Orchestrator:
             meta={
                 "resolved": execution.resolved_versions,
                 "usage": execution.output.usage,
+                "summary": execution.output.text,
                 "instance": execution.instance_id,
                 "warm": should_keep_warm(env, rate, samples, status == "ok"),
             },

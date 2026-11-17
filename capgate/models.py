@@ -171,6 +171,7 @@ class TaskSpec(BaseModel):
     hint_envs: list[str] = Field(default_factory=list)
     allow_parallel: bool = True
     budget_s: int = 300
+    taxonomy_version: str | None = None
 
     @property
     def task_type(self) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -26,7 +27,10 @@ pytestmark = [
 ]
 
 
-async def test_openai_rag_records_real_usage(system: System, tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_name", ["model_doc_answer", "codex_change"])
+async def test_openai_rag_records_real_usage(
+    system: System, tmp_path: Path, repo_root: Path, schema_name: str
+) -> None:
     public_root = os.environ["CAPGATE_TEST_PUBLIC_STATS_ROOT"]
     process = await asyncio.create_subprocess_exec(
         "git",
@@ -45,6 +49,14 @@ async def test_openai_rag_records_real_usage(system: System, tmp_path: Path) -> 
     model_env.agent.config["prices_usd_per_million"] = {
         "deepseek-flash": FLASH_PEAK_USD_PER_MILLION
     }
+    if schema_name != "model_doc_answer":
+        schemas = tmp_path / "schemas"
+        schemas.mkdir()
+        shutil.copyfile(
+            repo_root / "schemas" / f"{schema_name}.schema.json",
+            schemas / "model_doc_answer.schema.json",
+        )
+        system.store.schemas = schemas
 
     task = TaskSpec(
         goal="检索公开 Go 代码，再回答 Mean 用什么数值类型累加。答案须包含代码中的类型名。",
@@ -52,19 +64,27 @@ async def test_openai_rag_records_real_usage(system: System, tmp_path: Path) -> 
         hint_envs=["doc-qa-model"],
     )
     result = await system.orchestrator.run(task)
-    assert result.status == "ok", result.error or [run.error for run in result.runs]
+    if schema_name == "model_doc_answer":
+        assert result.status == "ok", result.error or [run.error for run in result.runs]
+        assert result.artifacts[0].name == "model_doc_answer"
+        artifact = system.store.load(result.artifacts[0])
+        assert "big.Rat" in artifact["answer"]
+        assert artifact["sources"] == ["stats.go"]
+        assert any(item.get("tool") == "mcp_rag__search" for item in result.runs[0].trace)
+    else:
+        assert result.status == "failed"
+        assert result.error is not None and "产物 model_doc_answer" in result.error
+        assert not result.artifacts
     assert result.runs[0].adapter == "openai"
-    assert result.artifacts[0].name == "model_doc_answer"
-    artifact = system.store.load(result.artifacts[0])
-    assert "big.Rat" in artifact["answer"]
-    assert artifact["sources"] == ["stats.go"]
-    assert any(item.get("tool") == "mcp_rag__search" for item in result.runs[0].trace)
 
     (run,) = system.ledger.runs(task.id)
+    assert run["status"] == result.status
     events = [
         item["payload"] for item in system.ledger.events(task.id) if item["kind"] == "llm.usage"
     ]
-    usage = json.loads(run["meta"])["usage"]
+    meta = json.loads(run["meta"])
+    usage = meta["usage"]
+    assert meta["summary"]
     assert len(events) == usage["requests"] >= 2
     for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost_usd"):
         assert usage[key] == pytest.approx(sum(event[key] for event in events))
@@ -72,4 +92,7 @@ async def test_openai_rag_records_real_usage(system: System, tmp_path: Path) -> 
     assert system.router._cost_factor(run["latency_ms"], usage["total_tokens"]) < (
         system.router._cost_factor(run["latency_ms"])
     )
+    (perf,) = system.ledger.perf(env_id="doc-qa-model", task_type=task.task_type)
+    assert perf["avg_tokens"] == usage["total_tokens"]
+    assert perf["avg_cost"] == pytest.approx(usage["cost_usd"])
     print(f"真实 RAG 模型调用和账本用量 {json.dumps(usage, ensure_ascii=False)}")

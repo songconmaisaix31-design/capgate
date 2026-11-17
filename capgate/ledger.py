@@ -119,10 +119,18 @@ class Ledger:
     # ------------------------------------------------------------ 写
 
     def add_task(self, spec: TaskSpec) -> None:
+        self._insert_task(spec, replace=True)
+
+    def reserve_task(self, spec: TaskSpec) -> bool:
+        return self._insert_task(spec, replace=False)
+
+    def _insert_task(self, spec: TaskSpec, *, replace: bool) -> bool:
+        insert = "INSERT OR REPLACE" if replace else "INSERT"
+        conflict = "" if replace else " ON CONFLICT(id) DO NOTHING"
         with self._conn as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO tasks(id,created_at,task_type,goal,tags,spec,status)"
-                " VALUES (?,?,?,?,?,?,?)",
+            cursor = conn.execute(
+                f"{insert} INTO tasks(id,created_at,task_type,goal,tags,spec,status)"
+                f" VALUES (?,?,?,?,?,?,?){conflict}",
                 (
                     spec.id,
                     utcnow(),
@@ -134,6 +142,7 @@ class Ledger:
                 ),
             )
             conn.commit()
+            return cursor.rowcount == 1
 
     def finish_task(self, task_id: str, status: str, error: str | None = None) -> None:
         with self._conn as conn:
@@ -321,7 +330,18 @@ class Ledger:
         SELECT {dimensions},
                COUNT(*) AS n,
                SUM(CASE WHEN r.status='ok' AND COALESCE(o.success,1)=1 THEN 1 ELSE 0 END) AS wins,
-               AVG(CASE WHEN r.latency_ms>0 THEN r.latency_ms END) AS avg_ms
+               AVG(CASE WHEN r.latency_ms>0 THEN r.latency_ms END) AS avg_ms,
+               AVG(CASE
+                   WHEN json_type(r.meta, '$.usage.total_tokens') IN ('integer','real')
+                   THEN json_extract(r.meta, '$.usage.total_tokens')
+                   WHEN r.adapter='cli'
+                    AND json_type(r.meta, '$.usage.input_tokens') IN ('integer','real')
+                    AND json_type(r.meta, '$.usage.output_tokens') IN ('integer','real')
+                   THEN json_extract(r.meta, '$.usage.input_tokens')
+                        + json_extract(r.meta, '$.usage.output_tokens')
+               END) AS avg_tokens,
+               AVG(CASE WHEN json_type(r.meta, '$.usage.cost_usd') IN ('integer','real')
+                        THEN json_extract(r.meta, '$.usage.cost_usd') END) AS avg_cost
         FROM runs r
         JOIN tasks t ON t.id = r.task_id
         LEFT JOIN (
