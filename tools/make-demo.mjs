@@ -136,7 +136,9 @@ const svg = render();
 const check = process.argv.includes("--check");
 
 if (check) {
-  const current = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
+  // Windows 下 core.autocrlf 会把盘上的 demo.svg 换成 CRLF，比对前先归一成 LF，
+  // 否则 --check 会因为行尾差异误报"过期"。
+  const current = existsSync(OUT) ? readFileSync(OUT, "utf8").replace(/\r\n?/g, "\n") : "";
   if (current !== svg) {
     console.error("assets/demo/demo.svg 已过期，请跑：node tools/make-demo.mjs");
     process.exit(1);

@@ -1,0 +1,23 @@
+id: repo-docs
+domain: 自举构建
+tags: [文档, README, 校验, 双语, docs]
+prior: 3.0
+capabilities:
+  - id: mcp-repo
+    kind: mcp
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-repo, tool: run_readme_check, args: {}, as: check }
+    - emit:
+        name: readme_check
+        body: "{{ check }}"
+artifacts:
+  produces: [readme_check]
+resources:
+  warm: true
+  ttl_s: 1800
+notes: 校验 README 双语覆盖 / 相对链接 / 图片存在 / demo.svg 最新；有任一问题就抛错让任务失败。

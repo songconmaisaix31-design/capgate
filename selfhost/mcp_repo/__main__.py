@@ -1,20 +1,44 @@
 """仓库操作 MCP：让 capgate 用它自己构建自己。
 
-工具是只读的（除了跑命令这件事本身）：静态检查、跑测试、列 issue、看仓库状态。
-放在 selfhost/ 里，不从主包导出——它是自举工作区的一部分，不是网关能力。
+只读工具（静态检查、跑测试、列 issue、看仓库状态）之外，issue #014 起又加了一组
+**受限写入**工具（write_file / apply_patch）。写入是双保险：
+
+1. 工具侧：默认 dry-run，显式 ``allow_write=true`` 才考虑落盘；路径只允许仓库内的
+   ``capgate/ tests/ docs/ envs/ capabilities/``，越界 / 绝对路径 / 符号链接一律拒绝。
+2. 操作者批准侧：进程只在启动时通过 ``CAPGATE_SELFHOST_APPROVED_PATCH`` 收到一个
+   **已审 patch 产物路径**；正式写入要求 allow_write、且当前动作的 path / diff /
+   前置状态（old_sha256）都与该产物一致。进程没收到批准就拒绝落盘——模型自己点
+   ``allow_write=true`` 没用。
+
+原始执行理由（reason）随 patch 产物与账本保留。放在 selfhost/ 里，不从主包导出。
 """
 
 from __future__ import annotations
 
+import contextlib
+import difflib
+import hashlib
+import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+import unidiff
 from mcp.server.fastmcp import FastMCP
+from tools.readme_check import check_readme, format_problems
 
-ROOT = Path(__file__).resolve().parents[2]
+_default_root = Path(__file__).resolve().parents[2]
+_root_env = os.environ.get("CAPGATE_SELFHOST_ROOT", "").strip()
+ROOT = Path(_root_env).resolve() if _root_env else _default_root
+
 mcp = FastMCP("capgate-repo")
+
+# 写入白名单：只允许这些顶层目录。README.md / selfhost/ / .github/ 都不在列——
+# 不能让网关改"检查它自己的检查"，也不能改引导它自己的 selfhost。
+WRITE_WHITELIST = ("capgate", "tests", "docs", "envs", "capabilities")
 
 
 def _run(args: list[str], timeout: int = 600) -> dict:
@@ -113,6 +137,203 @@ def repo_status() -> dict:
         ln for ln in _run(["git", "status", "--porcelain"])["stdout"].splitlines() if ln.strip()
     ]
     return {"branch": branch, "last_commit": last, "dirty_files": len(dirty), "root": str(ROOT)}
+
+
+@mcp.tool()
+def run_readme_check() -> dict:
+    """校验 README 的双语覆盖、相对链接、图片存在与 demo.svg 是否最新。
+
+    有任一问题就抛错（并列出具体到哪一节、哪个链接），否则返回完整报告。
+    """
+    report = check_readme(ROOT)
+    if not report["ok"]:
+        raise RuntimeError(format_problems(list(report["problems"])))
+    return report
+
+
+# ---------------------------------------------------------------- 受限写入
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _check_write_path(path: str) -> Path:
+    """把写入路径解析到仓库内的白名单目录；越界、绝对路径、符号链接一律拒绝。"""
+    p = Path(path)
+    if p.is_absolute():
+        raise ValueError(f"写入被拒绝：{path!r} 是绝对路径，只接受仓库内的相对路径")
+    # 路径里任何已存在的组件是符号链接都拒绝——写入不能穿过未授权的跳转。
+    probe = ROOT
+    for part in p.parts:
+        probe = probe / part
+        if probe.is_symlink():
+            raise ValueError(f"写入被拒绝：{path!r} 含符号链接组件 {part!r}")
+    resolved = probe.resolve()
+    if not resolved.is_relative_to(ROOT):
+        raise ValueError(f"写入被拒绝：{path!r} 越出仓库根目录")
+    rel = resolved.relative_to(ROOT)
+    if not rel.parts or rel.parts[0] not in WRITE_WHITELIST:
+        raise ValueError(f"写入被拒绝：{path!r} 不在白名单目录（{'、'.join(WRITE_WHITELIST)}）")
+    return resolved
+
+
+def _unified_diff(rel: str, old: str, new: str) -> str:
+    """用标准库 difflib 生成统一 diff（生成，不是解析）。"""
+    return "\n".join(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(), fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm=""
+        )
+    )
+
+
+def _apply_patch_safely(rel: str, old: str, diff: str) -> str:
+    """用 unidiff 校验 diff 只改一个文件，再用 git apply 在隔离目录生成新内容。
+
+    不手写 unified diff parser；任何多文件 / 路径不一致 / 上下文对不上都拒绝。
+    """
+    try:
+        patch = unidiff.PatchSet.from_string(diff)
+    except Exception as exc:
+        raise ValueError(f"diff 无法解析：{exc}") from exc
+    files = [f for f in patch if f.is_added_file or f.is_modified_file or f.is_removed_file]
+    if len(files) != 1:
+        raise ValueError(f"diff 必须只改一个文件，实际 {len(files)} 个")
+    declared = files[0].path
+    if declared != rel:
+        raise ValueError(f"diff 声明的文件 {declared!r} 与目标 {rel!r} 不一致")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        work = tmpdir / rel
+        work.parent.mkdir(parents=True, exist_ok=True)
+        work.write_text(old, encoding="utf-8")
+        proc = subprocess.run(
+            ["git", "apply", "--whitespace=nowarn"],
+            cwd=tmpdir,
+            input=diff,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise ValueError(f"git apply 失败：{detail or 'diff 无法应用'}")
+        return work.read_text(encoding="utf-8")
+
+
+def _atomic_write(target: Path, content: str) -> None:
+    """同目录临时文件 + 原子替换，避免写一半的落盘。"""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+# 操作者在进程启动时通过环境变量指定的已审 patch 产物。
+_APPROVED: dict | None = None
+_APPROVAL_ERROR = ""
+
+
+def _load_approval() -> None:
+    global _APPROVED, _APPROVAL_ERROR
+    raw = os.environ.get("CAPGATE_SELFHOST_APPROVED_PATCH", "").strip()
+    if not raw:
+        return
+    try:
+        p = Path(raw)
+        if not p.is_absolute():
+            p = ROOT / p
+        _APPROVED = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _APPROVAL_ERROR = f"批准产物无法读取：{exc}"
+
+
+_load_approval()
+
+
+def _require_approval(rel: str, diff: str, old_sha: str) -> None:
+    """正式写入必须匹配进程持有的已审 patch 产物，否则拒绝。"""
+    if _APPROVAL_ERROR:
+        raise ValueError(f"写入被拒绝：{_APPROVAL_ERROR}")
+    if _APPROVED is None:
+        raise ValueError(
+            "写入被拒绝：进程没有收到已审 patch 批准"
+            "（设置 CAPGATE_SELFHOST_APPROVED_PATCH 指向已审产物）"
+        )
+    if _APPROVED.get("path") != rel:
+        raise ValueError(
+            f"写入被拒绝：批准产物的 path 与当前动作不一致"
+            f"（批准 {_APPROVED.get('path')!r}，当前 {rel!r}）"
+        )
+    if _APPROVED.get("old_sha256") != old_sha:
+        raise ValueError("写入被拒绝：文件前置状态已变化，旧 patch 已过期")
+    if _APPROVED.get("diff") != diff:
+        raise ValueError("写入被拒绝：批准产物的 diff 与当前动作不一致")
+
+
+def _patch_result(
+    rel: str, old: str, new: str, reason: str, allow_write: bool, wrote: bool
+) -> dict:
+    return {
+        "path": rel,
+        "wrote": wrote,
+        "changed": old != new,
+        "diff": _unified_diff(rel, old, new),
+        "old_sha256": _sha256(old),
+        "new_sha256": _sha256(new),
+        "reason": reason,
+        "allow_write": allow_write,
+    }
+
+
+@mcp.tool()
+def write_file(path: str, content: str, allow_write: bool = False, reason: str = "") -> dict:
+    """写一个文件。默认 dry-run（只产出 diff）；allow_write=true 且进程持有匹配批准才落盘。
+
+    路径只允许仓库内的 capgate/ tests/ docs/ envs/ capabilities/，越界抛错。
+    """
+    target = _check_write_path(path)
+    rel = target.relative_to(ROOT).as_posix()
+    old = target.read_text(encoding="utf-8") if target.exists() else ""
+    new = content
+    changed = old != new
+    wrote = False
+    if allow_write:
+        _require_approval(rel, _unified_diff(rel, old, new), _sha256(old))
+        if changed:
+            _atomic_write(target, new)
+            wrote = True
+    return _patch_result(rel, old, new, reason, allow_write, wrote)
+
+
+@mcp.tool()
+def apply_patch(path: str, diff: str, allow_write: bool = False, reason: str = "") -> dict:
+    """把一个 unified diff 应用到文件上。默认 dry-run；allow_write=true 且持有匹配批准才落盘。
+
+    路径白名单同 write_file；diff 只许改这一个文件，应用失败 / 过期一律拒绝且不改文件。
+    """
+    target = _check_write_path(path)
+    rel = target.relative_to(ROOT).as_posix()
+    old = target.read_text(encoding="utf-8") if target.exists() else ""
+    new = _apply_patch_safely(rel, old, diff)
+    unified = _unified_diff(rel, old, new)
+    changed = old != new
+    wrote = False
+    if allow_write:
+        _require_approval(rel, unified, _sha256(old))
+        if changed:
+            _atomic_write(target, new)
+            wrote = True
+    return _patch_result(rel, old, new, reason, allow_write, wrote)
 
 
 def main() -> None:
