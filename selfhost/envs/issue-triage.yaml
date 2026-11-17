@@ -1,0 +1,27 @@
+id: issue-triage
+domain: 自举构建
+tags: [待办, issue, 梳理]
+prior: 2.5
+capabilities:
+  - id: mcp-repo
+    kind: mcp
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-repo, tool: list_issues, args: {}, as: issues }
+    - { capability: mcp-repo, tool: repo_status, args: {}, as: status }
+    - emit:
+        name: triage_report
+        body:
+          count: "{{ issues.count }}"
+          by_label: "{{ issues.by_label }}"
+          issues: "{{ issues.issues }}"
+          branch: "{{ status.branch }}"
+          last_commit: "{{ status.last_commit }}"
+          dirty_files: "{{ status.dirty_files }}"
+artifacts:
+  produces: [triage_report]
+notes: 把待办草稿和仓库状态放在一份产物里，便于开工前先看一眼。

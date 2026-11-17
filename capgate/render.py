@@ -70,6 +70,21 @@ def result_panel(result: TaskResult, console: Console) -> None:
         console.print(f"[red]error:[/red] {result.error}")
 
 
+def brief_result(result: TaskResult, console: Console) -> None:
+    """紧凑输出：给 CI 日志和 README 动画用，一行一件事。"""
+    mark = {"ok": "✓", "degraded": "!", "failed": "✗"}[result.status]
+    console.print(f"{mark} {result.task.task_type}  {result.task.goal}")
+    for decision in result.decisions:
+        if decision.stage in ("domain", "pipeline"):
+            console.print(f"  {decision.stage:<9} → {', '.join(decision.chosen) or '(无)'}")
+    for run in result.runs:
+        names = ", ".join(a.name for a in run.artifacts) or "—"
+        console.print(f"  {run.env_id:<10} {run.status:<7} {names}")
+    console.print(
+        f"status={result.status}  artifacts={len(result.artifacts)}  {result.latency_ms}ms"
+    )
+
+
 def artifacts_view(result: TaskResult, console: Console) -> None:
     if not result.artifacts:
         return

@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "triage_report",
+  "type": "object",
+  "required": ["count", "issues"],
+  "properties": {
+    "count": { "type": "integer" },
+    "by_label": { "type": "object" },
+    "issues": { "type": "array" },
+    "branch": { "type": "string" },
+    "last_commit": { "type": "string" },
+    "dirty_files": { "type": "integer" }
+  }
+}

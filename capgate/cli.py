@@ -176,6 +176,7 @@ def demo_cmd(
     scenario: str = typer.Option("all", "--scenario", "-s", help="pipeline | branch | doc | all"),
     root: str = typer.Option(None, "--root"),
     strategy: str = typer.Option(None, "--strategy", help="thompson | epsilon | static"),
+    brief: bool = typer.Option(False, "--brief", help="紧凑输出，给 CI 日志与 README 动画用"),
 ) -> None:
     """跑演示场景（离线，不依赖外网）。"""
     system = _system(root, strategy)
@@ -185,10 +186,14 @@ def demo_cmd(
         failed = 0
         try:
             for name in names:
-                console.rule(f"[bold]{name}[/bold] · {demo.SCENARIOS[name]['hint']}")
+                if not brief:
+                    console.rule(f"[bold]{name}[/bold] · {demo.SCENARIOS[name]['hint']}")
                 result = await demo.run_demo(system, name)
-                render.result_panel(result, console)
-                render.artifacts_view(result, console)
+                if brief:
+                    render.brief_result(result, console)
+                else:
+                    render.result_panel(result, console)
+                    render.artifacts_view(result, console)
                 failed += 0 if result.status == "ok" else 1
         finally:
             await system.aclose()

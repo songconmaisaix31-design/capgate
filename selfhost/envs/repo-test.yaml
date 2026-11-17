@@ -1,0 +1,23 @@
+id: repo-test
+domain: 自举构建
+tags: [测试, test, 回归]
+prior: 3.0
+capabilities:
+  - id: mcp-repo
+    kind: mcp
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-repo, tool: run_tests, args: { include_integration: false }, as: tests }
+    - emit:
+        name: test_report
+        body: "{{ tests }}"
+artifacts:
+  produces: [test_report]
+resources:
+  warm: true
+  ttl_s: 1800
+notes: 默认跳过需要真实 BCA/FIT 的集成用例；要全跑就改 recipe 的 include_integration。

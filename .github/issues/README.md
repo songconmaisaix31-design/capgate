@@ -4,7 +4,6 @@
 可以用 `gh` 一键建到仓库上：
 
 ```powershell
-# 先确认有 remote 和 gh 登录
 gh auth status
 .\scripts\file-issues.ps1 -DryRun     # 先看会建哪些
 .\scripts\file-issues.ps1             # 真建
@@ -21,10 +20,13 @@ gh auth status
 | 007 | 多进程并发假设 | tech-debt, p2 |
 | 008 | llm_fallback 实现与评估 | enhancement, p2 |
 | 009 | tag 受控词表与任务类型规范化 | tech-debt, p1 |
-| 010 | 开 CI | infra, p1 |
-| 011 | 看板补人工验收 / pin / 重跑 | enhancement, p2 |
-| 012 | [上游] BCA 仓库无法构建 | upstream, p1 |
-| 013 | [上游] FIT 日志写 stdout | upstream, p2 |
+| 010 | 看板补人工验收 / pin / 重跑 | enhancement, p2 |
+| 011 | [上游] BCA 仓库无法构建 | upstream, p1 |
+| 012 | [上游] FIT 日志写 stdout | upstream, p2 |
+| 013 | selfhost 还没把 README 动效与文档校验纳入门禁 | enhancement, p2 |
+| 014 | selfhost 只能检查不能修：缺受限写入能力 | enhancement, p3 |
+
+> 原 `#010 开 CI` 已直接实现（`.github/workflows/ci.yml`），不再占一个 issue。
 
 ## 优先级含义
 
@@ -34,8 +36,7 @@ gh auth status
 
 ## 建议顺序
 
-1. **010 CI** —— 先把门守住，后面所有改动才有回归保护。
-2. **001 retry-alt** —— 现在是个会误导人的"假功能"。
-3. **012 上游 BCA 构建** —— 让能力指向源码仓库而不是临时副本。
-4. **009 tag 词表** —— 样本攒得越久越难改，越早越好。
-5. 其余按 `p2` 排。
+1. **001 retry-alt** —— 现在是个会误导人的"假功能"。
+2. **011 上游 BCA 构建** —— 让能力指向源码仓库而不是临时副本。
+3. **009 tag 词表** —— 样本攒得越久越难改，越早越好。
+4. 其余按 `p2` 排。

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="488" viewBox="0 0 900 488" role="img" aria-label="capgate 终端演示">
+  <style>
+    .bg { fill: #0d1117; }
+    text { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Noto Sans Mono CJK SC", monospace; font-size: 13px; fill: #c9d1d9; }
+    .title { fill: #8b949e; font-size: 12px; }
+    .cmd { fill: #58a6ff; }
+    .line { opacity: 0; animation: fade .26s ease-out forwards; }
+    .accent { fill: #d2a8ff; }
+    .ok { fill: #3fb950; }
+    .cursor { animation: blink 1.06s steps(2, start) infinite; }
+    @keyframes fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+    @keyframes blink { 50% { opacity: 0; } }
+  </style>
+  <rect class="bg" width="100%" height="100%" rx="0"/>
+  <g class="card">
+    <rect x="26" y="26" width="848" height="188" rx="10" fill="#161b22" stroke="#30363d"/>
+    <circle cx="44" cy="44" r="4" fill="#f85149"/>
+    <circle cx="58" cy="44" r="4" fill="#d29922"/>
+    <circle cx="72" cy="44" r="4" fill="#3fb950"/>
+    <text x="88" y="48" class="title">capgate · 一次任务的路由与执行</text>
+    <text x="44" y="66" class="cmd">$ python -m capgate demo -s pipeline --strategy static --brief</text>
+    <text x="44" y="78" class="line ok" style="animation-delay:0.15s">✓ 爬虫  抓取示例站点并汇总其中的链接</text>
+    <text x="44" y="99" class="line accent" style="animation-delay:0.24s">  domain    → crawler</text>
+    <text x="44" y="120" class="line accent" style="animation-delay:0.33s">  pipeline  → crawler, analyst</text>
+    <text x="44" y="141" class="line" style="animation-delay:0.42s">  crawler    ok      crawl_batch</text>
+    <text x="44" y="162" class="line" style="animation-delay:0.51s">  analyst    ok      crawl_summary</text>
+    <text x="44" y="183" class="line" style="animation-delay:0.60s">status=ok  artifacts=2  &lt;ms&gt;</text>
+  </g>
+  <g class="card">
+    <rect x="26" y="232" width="848" height="230" rx="10" fill="#161b22" stroke="#30363d"/>
+    <circle cx="44" cy="250" r="4" fill="#f85149"/>
+    <circle cx="58" cy="250" r="4" fill="#d29922"/>
+    <circle cx="72" cy="250" r="4" fill="#3fb950"/>
+    <text x="88" y="254" class="title">selfhost · 用 capgate 跑自己的质量门</text>
+    <text x="44" y="272" class="cmd">$ python -m selfhost.loop --only T03</text>
+    <text x="44" y="284" class="line" style="animation-delay:0.69s">selfhost · root=&lt;repo&gt;/selfhost</text>
+    <text x="44" y="305" class="line" style="animation-delay:0.78s">envs=3  capabilities=1</text>
+    <text x="44" y="326" class="line ok" style="animation-delay:0.87s">✓ triage   汇总待办草稿与仓库状态，决定今天先做哪件事</text>
+    <text x="44" y="347" class="line accent" style="animation-delay:0.96s">    domain    → issue-triage</text>
+    <text x="44" y="368" class="line accent" style="animation-delay:1.05s">    pipeline  → issue-triage</text>
+    <text x="44" y="389" class="line" style="animation-delay:1.14s">    issue-triage ok      triage_report</text>
+    <text x="44" y="410" class="line" style="animation-delay:1.23s">    status=ok  artifacts=1  &lt;ms&gt;</text>
+    <text x="44" y="431" class="line" style="animation-delay:1.32s">完成 1 条，失败 0 条。账本：&lt;repo&gt;/selfhost/var/capgate.db</text>
+  </g>
+  <text x="866" y="476" class="cursor" fill="#3fb950">▍</text>
+</svg>

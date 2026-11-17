@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "lint_report",
+  "type": "object",
+  "required": ["ok", "exit_code", "errors"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "exit_code": { "type": "integer" },
+    "errors": { "type": "integer" },
+    "fixed": { "type": "boolean" },
+    "summary": { "type": "string" }
+  }
+}

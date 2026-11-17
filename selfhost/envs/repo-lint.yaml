@@ -1,0 +1,23 @@
+id: repo-lint
+domain: 自举构建
+tags: [lint, 静态检查, 代码规范]
+prior: 3.0
+capabilities:
+  - id: mcp-repo
+    kind: mcp
+    version: "*"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-repo, tool: run_lint, args: {}, as: lint }
+    - emit:
+        name: lint_report
+        body: "{{ lint }}"
+artifacts:
+  produces: [lint_report]
+resources:
+  warm: true
+  ttl_s: 1800
+notes: 跑 ruff check；这是 capgate 自己的质量门之一。

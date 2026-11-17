@@ -1,0 +1,10 @@
+id: mcp-repo
+kind: mcp
+title: 仓库操作（lint / 测试 / issue / 状态），自举专用
+versions:
+  - version: "0.1.0"
+    transport: stdio
+    command: python
+    args: ["-m", "selfhost.mcp_repo"]
+    tools: [run_lint, run_tests, list_issues, repo_status]
+    startup_timeout: 60
