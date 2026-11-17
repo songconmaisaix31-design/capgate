@@ -190,7 +190,7 @@ class Candidate(BaseModel):
 
 
 class Decision(BaseModel):
-    stage: Literal["domain", "agent", "pipeline", "fallback"]
+    stage: Literal["domain", "agent", "pipeline", "fallback", "retry"]
     strategy: str
     chosen: list[str]
     candidates: list[Candidate] = Field(default_factory=list)
