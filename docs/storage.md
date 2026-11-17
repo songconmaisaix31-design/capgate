@@ -6,10 +6,10 @@
 ## 布局与内容寻址
 
 ```
-var/artifacts/<task_id>/<name>@<version>-<sha8>.json
+var/artifacts/<task_id>/<name>@<version>-<sha256>.json
 ```
 
-- sha256 是完整摘要，文件名用前 8 位便于人读；`name@version` 让人一眼看出契约版本。
+- 新文件名使用完整 SHA-256。旧账本中的短摘要路径仍按保存的路径读取。
 - 同一份内容 → 同一 sha → 同一文件名。**同一 task 内相同内容天然去重**。
 - 账本 `artifacts` 表登记每一份产物（sha256 / path / bytes / producer），文件内容在磁盘上，
   账本记录是审计来源。**删文件不动账本记录**——历史任务的 `chain` 依然能看到当时产了
@@ -53,9 +53,9 @@ producer 与它的流式 consumer 用 `asyncio.gather` 并发跑——所以下�
 
 ```python
 writer = store.open_stream(task_id, name, env_id=env.id, run_id=run_id)
-writer.write_chunk({"url": "u"})          # 逐条落盘，下游此刻已能读到
+writer.write_chunk({"url": "u"})  # 逐条落盘，下游此刻已能读到
 writer.write_chunk({"links": ["a"]})
-artifact = writer.seal()                  # 组装最终快照（sha = 最终快照哈希）
+artifact = writer.seal()  # 组装最终快照（sha = 最终快照哈希）
 ```
 
 recipe 里两个新步骤：producer 用 `stream_emit`（写一条 chunk），consumer 用
@@ -74,42 +74,29 @@ recipe 里两个新步骤：producer 用 `stream_emit`（写一条 chunk），co
 
 ### 演示与实测（crawler-stream → analyst-stream）
 
-`capgate demo -s stream` 跑流式链路；`demo.run_stream_comparison` 用同一个 fixture 对比
-整块与流式的结果和耗时（结果一致，`fetched_at` 除外）。本机（Windows，Python 3.13，
-暖 MCP）实测 5 轮：
+`capgate demo -s stream` 运行流式链路。`demo.run_stream_comparison` 用同一示例输入比较
+整块与流式执行。两组实测均在本机 Windows、Python 3.13、预热 MCP 后交替跑六对任务。
 
-| 模式 | 平均时延 |
+| 模式 | 中位时延 |
 |---|---|
-| 整块 `crawler → analyst` | ~46 ms |
-| 流式 `crawler-stream → analyst-stream` | ~62 ms |
+| 整块 `crawler → analyst` | 44–47 ms |
+| 流式 `crawler-stream → analyst-stream` | 64–66 ms |
 
-**结论**：这个微工作负载（3 次 MCP 往返 + 进程内汇总）下流式**没有更快**——重叠省下的
-只有一次 `extract_text` 往返（~5ms），而增量通道的协作开销（事件通知 + 增量文件读写 +
-并发调度，~17ms）更大。优化前 per-chunk 反复 `open`/`close` 文件句柄时是 ~96ms，改成
-持久 fd 后降到 ~62ms，已把关键路径上最大的开销修掉。流式的价值在"边爬边喂"的大负载
-（每 chunk 本身耗时可观）才体现；对 45ms 级的小任务，整块更省。此结果已如实记录，
-`before_seal=True` 的证据说明**增量交付机制本身是正确**的。
+流式任务的 `before_seal=True` 事件记录了下游在最终快照前的消费。两种模式的汇总结果一致，
+上游的 `fetched_at` 记录各自运行时间。这个工作负载的端到端时延目标尚未达成。
 
 ## 并发模型：本机单写者（issue #7）
 
-**决定**：同一时刻只允许一个进程写账本，用一把跨进程文件锁（`FileLock`）串行化每次
-账本访问；产物写入走"临时文件 + 原子 rename"。
+同一时刻只有一个进程能访问账本。`Ledger` 先获取进程内 `RLock`，再获取 `filelock`
+提供的 `<db>.lock`。连接关闭也持有这两把锁，覆盖 SQLite 的隐式 checkpoint。
+`capgate doctor` 用非阻塞探测查看账本锁是否正被占用。
 
-- `Ledger` 每次进出临界区先拿进程内 `RLock`（FastAPI 线程池安全），再拿进程间
-  `FileLock`（`<db>.lock`）。`FileLock` 直接包装成熟库 `filelock`：它统一平台差异
-  （Windows `msvcrt` / Unix `flock`），阻塞 `acquire` 带真实超时（轮询 `is_locked` 而非
-  裸 `flock` 无限阻塞），`is_locked` 精确区分是否被持有。CLI 与 `serve` 同时跑，写操作
-  排队而不会 `database is locked`，也不会在 WAL checkpoint 时丢事件。
-- 锁在进程退出时由操作系统自动释放，不会像目录锁那样留下僵尸锁。
-- 产物 `put` 先写唯一命名的临时文件再 `os.replace`；进程被 kill 不会留下半截 JSON。
-  并发写同名产物（内容相同、sha 相同）时 Windows 的 replace 可能报 access denied，
-  代码检测到目标已存在且内容相同则跳过——内容寻址保证这无害。
-- `capgate doctor` 用非阻塞探测判断是否有其他进程正在持锁。
+产物先完整写入同目录的唯一临时文件，再通过硬链接将文件原子安装到最终路径。若路径已存在，
+只有磁盘内容与新内容字节一致时才复用。使用产物库的本地文件系统需支持硬链接。
 
-**什么时候必须打破这个前提**：多用户、多机、高并发（见 ARCHITECTURE 的规模假设）。
-届时账本换 Postgres、产物库换对象存储、`MCPHub` 换独立服务；文件锁只保本机正确性，
-不是跨机的分布式锁。另注意本机 SQLite 若 < 3.51.3，WAL-reset 竞态区间仍在，退回
-`CAPGATE_SQLITE_JOURNAL=delete` 可彻底绕开（`doctor` 会提示）。
+这些锁协调同一台机器上共享账本路径的 capgate 进程。跨主机或由外部进程直接写 SQLite 时，
+需要单独选择并发模型。使用 SQLite 3.51.3 之前的版本时，`doctor` 会报告 WAL-reset 风险，
+可设 `CAPGATE_SQLITE_JOURNAL=delete` 使用 DELETE 日志模式。
 
 ## 相关接口
 

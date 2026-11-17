@@ -3,9 +3,9 @@
 规矩（架构约束 2）：env 之间禁止直连，一切产物经这里中转。
 这样可追溯、可重放、可计费；出问题能定位到"谁吐了什么"。
 
-落盘路径：``var/artifacts/<task_id>/<name>@<version>-<sha8>.json``。sha256 是
-完整摘要，文件名用前 8 位便于人读。写文件先落临时文件再 ``os.replace`` 原子改名，
-进程被 kill 也不会留下半截 JSON。
+落盘路径：``var/artifacts/<task_id>/<name>@<version>-<sha256>.json``，文件名用完整
+SHA-256（同名即同内容，杜绝八位摘要冲突）。写文件先落同目录临时文件再原子硬链接
+安装，进程被 kill 也不会留下半截 JSON。
 
 流式通道（issue #6）：声明 ``stream: true`` 的 env 按 chunk 写、按 chunk 读，仍经
 本库中转。producer 每写一条 chunk 立即落盘到 ``<name>@<version>.stream``
@@ -31,7 +31,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import jsonschema
+
 from .models import Artifact, ArtifactContract, utcnow
+
+# Windows 下 os.open 默认文本模式会翻译换行；显式二进制，避免 .stream 内容被改写。
+_O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 class SchemaError(ValueError):
@@ -97,8 +102,10 @@ class StreamWriter:
         with contextlib.suppress(OSError):
             self.stream_path.unlink()
         # 二进制 + 持久 fd：每条 chunk 只 write，不反复 open/close；os.write 直写 OS，
-        # 无用户态缓冲，另一侧 reader 立刻能读到。
-        self._fd = os.open(self.stream_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        # 无用户态缓冲，另一侧 reader 立刻能读到。显式 O_BINARY 避免 Windows 换行翻译。
+        self._fd = os.open(
+            self.stream_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_BINARY, 0o644
+        )
 
     @property
     def event(self) -> asyncio.Event:
@@ -157,8 +164,8 @@ class StreamReader:
         self.merged: dict[str, Any] = {}
         self.first_chunk_read_at: float | None = None
         self._first_read_before_seal = False
-        # 二进制读 + 持久 fd：从当前偏移增量读，不反复 open/close。
-        self._fd = os.open(self.writer.stream_path, os.O_RDONLY)
+        # 二进制读 + 持久 fd：从当前偏移增量读，不反复 open/close。显式 O_BINARY。
+        self._fd = os.open(self.writer.stream_path, os.O_RDONLY | _O_BINARY)
 
     @property
     def truncated(self) -> bool:
@@ -263,7 +270,8 @@ class ArtifactStore:
             self.validate(name, payload)
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
         sha = hashlib.sha256(raw).hexdigest()
-        rel = Path(task_id) / f"{name}@{version}-{sha[:8]}.json"
+        # 用完整 SHA-256 命名：同名即同内容，杜绝八位摘要冲突覆盖另一份文件。
+        rel = Path(task_id) / f"{name}@{version}-{sha}.json"
         self._write_atomic(rel, raw)
         return Artifact(
             name=name,
@@ -279,11 +287,10 @@ class ArtifactStore:
         )
 
     def _write_atomic(self, rel: Path, raw: bytes) -> None:
-        """先写临时文件再 ``os.replace``，保证产物写入原子、不留半截文件。
+        """同目录临时文件 + 原子硬链接安装，杜绝半截文件。
 
-        内容寻址意味着同一 rel 只对应同一种内容：并发写同名产物（sha 相同）时，
-        Windows 的 ``os.replace`` 可能对另一个线程正在替换的目标报 ``Access denied``。
-        此时目标文件已由对方完整写好且内容一致，跳过即可。
+        用完整 SHA-256 命名后，同名即同内容（内容寻址）：目标已存在时仅在字节
+        完全一致才算成功，摘要冲突或其他任何 I/O 错误都直接失败，绝不静默覆盖。
         """
         dest = self.root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -291,11 +298,10 @@ class ArtifactStore:
         try:
             tmp.write_bytes(raw)
             try:
-                os.replace(tmp, dest)
-            except OSError:
-                if dest.exists():
-                    return  # 同名且同内容，已有完整文件，跳过
-                raise
+                os.link(tmp, dest)  # 原子安装：dest 要么完整出现，要么不存在
+            except FileExistsError:
+                if dest.read_bytes() != raw:  # 内容寻址下只接受字节一致的重复写
+                    raise
         finally:
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
@@ -356,14 +362,6 @@ class ArtifactStore:
         if schema is None:
             if not isinstance(payload, (dict, list)):
                 raise SchemaError(f"产物 {name} 必须是对象或数组，收到 {type(payload).__name__}")
-            return
-        try:
-            import jsonschema  # type: ignore
-        except ImportError:  # 降级：只校验顶层 required
-            required = schema.get("required", []) if isinstance(schema, dict) else []
-            missing = [k for k in required if not isinstance(payload, dict) or k not in payload]
-            if missing:
-                raise SchemaError(f"产物 {name} 缺少必填字段：{missing}") from None
             return
         try:
             jsonschema.validate(payload, schema)

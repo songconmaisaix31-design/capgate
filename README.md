@@ -191,7 +191,7 @@ capgate/
 | Model routing · 模型路由 | A live DeepSeek endpoint verified retrieval, token accounting, and the routing judge. Usage is also retained when an artifact fails validation.<br/>真实 DeepSeek 端点验证了检索、用量统计和模型裁决。产物校验失败时仍保留已知用量。 |
 | Selfhost · 自举 | The gateway ran the lint, triage and README checks. The restricted write flow requires an operator-reviewed patch, and the ledger stores the diff and execution reason.<br/>网关运行了静态检查、待办梳理和 README 校验。受限写入需要操作者审核 patch，账本保留 diff 和执行理由。 |
 | Agent-autoloop | A real local worker reran a FIT task, and repeated requests reused the same event and task. The WeCom entry point requires a real bot to verify message delivery, attachments and reconnection.<br/>实际本机工作器重跑了 FIT 任务，重复请求复用同一事件与任务。企业微信入口的收发、附件与重连仍需真实机器人验收。 |
-| Streaming · 流式产物 | The downstream environment started before the final snapshot and produced matching results. In six alternating pairs on a local fixture, median end-to-end latency was 66 ms streaming and 47 ms in batch mode. The latency target remains unmet for that workload.<br/>下游在最终快照完成前开始处理，产物结果一致。本机同一示例输入交替执行六对任务，端到端时延中位数为流式 66 ms、整块 47 ms。该工作负载的时延验收尚未通过。 |
+| Streaming · 流式产物 | The downstream environment started before the final snapshot and produced matching summaries. Two warmed benchmarks of six alternating pairs each measured median end-to-end latency of 64–66 ms streaming and 44–47 ms in batch mode. The latency target remains unmet for this workload.<br/>下游在最终快照完成前开始处理，汇总结果一致。两组实测在预热后各交替执行六对任务，端到端时延中位数为流式 64–66 ms、整块 44–47 ms。该工作负载的时延验收尚未通过。 |
 
 ## License · 许可
 

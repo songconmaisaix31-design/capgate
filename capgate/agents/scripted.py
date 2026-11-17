@@ -85,13 +85,14 @@ class ScriptedAdapter:
                         "（上游要声明 stream: true 且走流式编排）"
                     )
                 reader = session.readers[name]
-                await reader.wait_for(spec.get("until", []))
+                until = spec.get("until", [])
+                await reader.wait_for(until)
                 ns[step.get("as") or name] = reader.merged
                 trace.append(
                     {
                         "step": index,
                         "stream_collect": name,
-                        "until": spec.get("until", []),
+                        "until": until,
                         "truncated": reader.truncated,
                         "before_seal": reader.first_chunk_before_seal,
                     }
@@ -100,11 +101,18 @@ class ScriptedAdapter:
                     "agent.stream_collect",
                     {
                         "name": name,
-                        "until": spec.get("until", []),
+                        "until": until,
                         "truncated": reader.truncated,
                         "before_seal": reader.first_chunk_before_seal,
                     },
                 )
+                # 收到显式 truncated 却仍缺必填 key：诊断必须点出 truncated，而不是
+                # 让下一步的"模板变量不存在"去掩盖真相。
+                missing = [k for k in until if k not in reader.merged]
+                if missing and reader.truncated:
+                    raise AgentError(
+                        f"流式产物 {name} 已截断（truncated），缺少字段 {missing}，下游无法继续"
+                    )
                 continue
 
             capability = step.get("capability")
