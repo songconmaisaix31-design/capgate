@@ -8,7 +8,7 @@ model each environment runs, and records the whole decision chain where you can 
 
 ![python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![license](https://img.shields.io/badge/license-MIT-3fb950)
-![tests](https://img.shields.io/badge/tests-49%20passed-3fb950)
+![tests](https://img.shields.io/badge/tests-64%20passed-3fb950)
 ![style](https://img.shields.io/badge/style-ruff-261230)
 ![mode](https://img.shields.io/badge/mode-local--only-8b949e)
 
@@ -174,7 +174,7 @@ capgate/
 ├── selfhost/           # builds this repo · 自举工作区
 ├── tools/make-demo.mjs # renders the demo SVG · 渲染演示动效
 ├── assets/demo/        # generated, committed · 生成的动效
-└── tests/              # 49 tests · 49 个测试
+└── tests/              # 64 tests · 64 个测试
 ```
 
 ## Status · 状态
@@ -183,17 +183,16 @@ capgate/
 
 `0.1.0`。下面是真跑过的，不是打算做的：
 
-- `pytest -q` → **49 passed** (3 of them spawn the real BCA / FIT MCPs, skipped when missing).
+- `pytest -q` → **64 passed** (3 of them spawn the real BCA / FIT MCPs, skipped when missing).
 - `capgate demo -s all` → **3 scenarios ok**, offline, no network.
 - `python -m selfhost.loop` → **3 tasks ok** (lint 3.3s, test 16.3s, triage 0.2s).
 - `capgate probe mcp-bca` → **125 tools**; `mcp-fit` → **6 tools**.
 - Shared capability reuse: first `bca-chain` run 3.3s, second env on the same connection ~10ms.
 
-Deliberately not done — 14 issues, each with acceptance criteria:
+Remaining issues and limitations:
 
-故意没做的，14 条 issue，每条都带验收标准：
+尚未完成的功能与限制：
 
-- `retry-alt` only degrades, it does not retry on another candidate env.
 - The `openai` and `cli` adapters were never run against a real endpoint.
 - No streaming artifacts, no artifact GC, no multi-writer support — single-user, local-only.
 - `selfhost` can check this repo but cannot fix it; write access is issue #014.

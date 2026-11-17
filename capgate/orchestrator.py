@@ -29,6 +29,7 @@ from .router import Router
 from .supervisor import Supervisor, should_keep_warm
 
 MAX_ENVS_PER_TASK = 8
+MAX_ALT_RETRIES = 2
 
 
 def _names(refs: list[str]) -> set[str]:
@@ -68,11 +69,11 @@ class Orchestrator:
                 raise RuntimeError("没有任何 env 能承接这个任务")
 
             pipeline = [self.registry.get(eid) for eid in result.decisions[-1].chosen]
-            await self._execute(task, pipeline, result)
+            effective_runs = await self._execute(task, pipeline, result)
 
-            if any(run.status == "failed" for run in result.runs):
+            if any(run.status == "failed" for run in effective_runs):
                 result.status = "failed"
-            elif any(run.status == "degraded" for run in result.runs):
+            elif any(run.status == "degraded" for run in effective_runs):
                 result.status = "degraded"
         except Exception as exc:
             result.status = "failed"
@@ -216,13 +217,18 @@ class Orchestrator:
 
     async def _execute(
         self, task: TaskSpec, pipeline: list[EnvManifest], result: TaskResult
-    ) -> None:
+    ) -> list[RunResult]:
         produced: set[str] = set()
         payloads: dict[str, Any] = {}
         remaining = list(pipeline)
         blocked = False
+        effective_runs: list[RunResult] = []
 
         while remaining and not blocked:
+            attempted = {run.env_id for run in result.runs}
+            remaining = [env for env in remaining if env.id not in attempted]
+            if not remaining:
+                break
             wave = [env for env in remaining if _names(env.artifacts.consumes) <= produced]
             if not wave:
                 wave = remaining[:1]  # 契约成环或不可满足：先跑一个，让失败显性化
@@ -230,9 +236,12 @@ class Orchestrator:
 
             runs = await self._run_wave(task, wave, payloads, result)
             for run in runs:
-                if run.status in ("ok", "degraded"):
-                    produced |= {a.name for a in run.artifacts}
-                blocked = await self._apply_failure_policy(task, run, result)
+                stop, effective_run = await self._apply_failure_policy(task, run, result, payloads)
+                blocked = stop
+                if effective_run is not None:
+                    effective_runs.append(effective_run)
+            produced = set(payloads)
+        return effective_runs
 
     async def _run_wave(
         self,
@@ -310,7 +319,6 @@ class Orchestrator:
             self.ledger.finish_run(run, meta={"error": str(exc), "resolved": _versions(env)})
             self.ledger.event(task.id, "env.failed", {"error": str(exc)}, env_id=env.id)
             result.runs.append(run)
-            result.error = result.error or str(exc)
             return run
 
         artifacts: list[Artifact] = []
@@ -360,26 +368,111 @@ class Orchestrator:
         return run
 
     async def _apply_failure_policy(
-        self, task: TaskSpec, run: RunResult, result: TaskResult
-    ) -> bool:
+        self,
+        task: TaskSpec,
+        run: RunResult,
+        result: TaskResult,
+        payloads: dict[str, Any],
+    ) -> tuple[bool, RunResult | None]:
         if run.status in ("ok", "degraded"):
-            return False
+            return False, run
         env = self.registry.get(run.env_id)
         if env.failure_policy == "abort":
-            result.error = result.error or f"env {env.id} 失败，策略 abort"
-            return True
+            result.error = result.error or run.error or f"env {env.id} 失败，策略 abort"
+            return True, run
         if env.failure_policy == "degrade":
             result.status = "degraded"
-            return False
-        # retry-alt：交给下一个还没试过的候选 env 再来一次（这里只记录，不在此处重跑）
+            result.error = result.error or run.error
+            return False, run
+        return False, await self._retry_alternatives(task, env, run, result, payloads)
+
+    async def _retry_alternatives(
+        self,
+        task: TaskSpec,
+        original: EnvManifest,
+        run: RunResult,
+        result: TaskResult,
+        payloads: dict[str, Any],
+    ) -> RunResult | None:
+        domain = next(decision for decision in result.decisions if decision.stage == "domain")
+        failures = [run]
+        for attempt in range(1, MAX_ALT_RETRIES + 1):
+            alternative, candidates = self._retry_candidates(original, domain, result, payloads)
+            reason = f"env {run.env_id} 执行失败：{run.error or '未提供失败原因'}；"
+            if alternative is None:
+                reason += "领域候选中没有未尝试且满足输入与产出契约的 env，按 degrade 处理"
+            else:
+                reason += (
+                    f"按领域候选顺序换到 {alternative.id}，当前产物满足其 consumes，"
+                    f"其 produces 覆盖 {original.id} 的声明，"
+                    f"执行第 {attempt}/{MAX_ALT_RETRIES} 次替代重试"
+                )
+            decision = Decision(
+                stage="retry",
+                strategy="retry-alt",
+                chosen=[alternative.id] if alternative else [],
+                candidates=candidates,
+                reason=reason,
+            )
+            self.ledger.decide(task.id, decision)
+            result.decisions.append(decision)
+            if alternative is None:
+                break
+            self.ledger.event(
+                task.id,
+                "env.retry_alt",
+                {"failed_env": run.env_id, "replacement_env": alternative.id, "attempt": attempt},
+                env_id=run.env_id,
+            )
+            run = await self._run_env(task, alternative, payloads, result)
+            if run.status in ("ok", "degraded"):
+                return run
+            failures.append(run)
+
         result.status = "degraded"
-        self.ledger.event(
-            task.id,
-            "env.retry_alt",
-            {"failed_env": env.id, "note": "已记录，下一个 wave 继续"},
-            env_id=env.id,
+        error = "替代重试未成功，按 degrade 处理；已尝试：" + "；".join(
+            f"env {failed.env_id}：{failed.error or '未提供失败原因'}" for failed in failures
         )
-        return False
+        result.error = f"{result.error}；{error}" if result.error else error
+        return None
+
+    def _retry_candidates(
+        self,
+        original: EnvManifest,
+        domain: Decision,
+        result: TaskResult,
+        payloads: dict[str, Any],
+    ) -> tuple[EnvManifest | None, list[Candidate]]:
+        attempted = {run.env_id for run in result.runs}
+        required = _names(original.artifacts.produces)
+        produced = set(payloads)
+        chosen: EnvManifest | None = None
+        candidates = []
+        for candidate in domain.candidates:
+            exclusions = []
+            if candidate.id in attempted:
+                exclusions.append("已经尝试过")
+            if candidate.id not in self.registry:
+                exclusions.append("env 未注册")
+            else:
+                env = self.registry.get(candidate.id)
+                missing_inputs = _names(env.artifacts.consumes) - produced
+                missing_outputs = required - _names(env.artifacts.produces)
+                if missing_inputs:
+                    exclusions.append(f"缺少已产出的输入产物：{sorted(missing_inputs)}")
+                if missing_outputs:
+                    exclusions.append(f"未声明原 env 所需的产物：{sorted(missing_outputs)}")
+            if exclusions:
+                detail = "排除：" + "；".join(exclusions)
+            elif chosen is None:
+                chosen = self.registry.get(candidate.id)
+                detail = "输入与产出契约满足，按领域候选顺序选中"
+            else:
+                detail = "输入与产出契约满足，领域候选顺序靠后"
+            if candidate.detail:
+                detail = f"{candidate.detail}；{detail}"
+            candidates.append(candidate.model_copy(update={"detail": detail}))
+        return chosen, candidates
 
 
 def _versions(env: EnvManifest) -> dict[str, str]:
