@@ -25,6 +25,7 @@ gh auth status
 | 012 | [上游] FIT 日志写 stdout | upstream, p2 |
 | 013 | selfhost 还没把 README 动效与文档校验纳入门禁 | enhancement, p2 |
 | 014 | selfhost 只能检查不能修：缺受限写入能力 | enhancement, p3 |
+| 015 | 微信里的任务进不来：缺一个 IM 任务入口 | enhancement, p2 |
 
 > 原 `#010 开 CI` 已直接实现（`.github/workflows/ci.yml`），不再占一个 issue。
 
