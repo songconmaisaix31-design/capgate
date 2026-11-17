@@ -114,7 +114,7 @@ and its tags in `envs/*.yaml`. A workspace with `taxonomy.yaml` resolves aliases
 | 知识问答 | `doc-qa` | `mcp-rag` (bundled example RAG)<br/>随包示例 RAG |
 | 模型知识问答 | `doc-qa-model` | `mcp-rag` with an OpenAI-compatible model API<br/>通过兼容 OpenAI 的模型 API 检索已授权语料 |
 | 判断上下文 | `swa-attention` | `mcp-swa` exposes read-only attention state, focus and experience queries<br/>查询注意力状态、焦点和经验 |
-| 代码修改 | `codex-dev` | Codex CLI with `gpt-6.1-sol` returns a structured `codex_change` suggestion from supplied context<br/>通过 Codex CLI 调用 `gpt-6.1-sol`，按提供的上下文生成结构化 `codex_change` 建议 |
+| 代码修改 | `codex-dev` | Codex CLI with `gpt-6.1-sol` returns replacement text for supplied files. Capgate generates the diff in `codex_change`.<br/>通过 Codex CLI 调用 `gpt-6.1-sol`，返回所提供文件的替换文本。Capgate 生成 `codex_change` 中的 diff。 |
 | 演示 | `chain-watch` | `sdk-chain` (deterministic stub)<br/>确定性演示桩 |
 
 ## Quick start · 快速开始
@@ -155,6 +155,7 @@ python -m capgate solve "区块链有哪些能力可用？" -t 区块链 -t 能�
 | [.github/issues/](.github/issues/README.md) | Original requirements and acceptance criteria.<br/>原始需求与验收条件。 |
 | [selfhost/README.md](selfhost/README.md) | You want to build this repo with this repo.<br/>想用 capgate 构建 capgate。 |
 | [docs/model-routing.md](docs/model-routing.md) | Configure a model endpoint and examine usage and routing decisions.<br/>配置模型端点，查看用量和路由裁决。 |
+| [docs/codex-artifact.md](docs/codex-artifact.md) | Supply source files and verify the generated Codex diff.<br/>提供原始文件并核对生成的 Codex 补丁。 |
 | [docs/storage.md](docs/storage.md) | Inspect retained artifacts, streaming contracts and local writer coordination.<br/>了解产物保留、流式契约和本机写入协调。 |
 | [integrations/agent-autoloop/README.md](integrations/agent-autoloop/README.md) | Configure agent-autoloop reruns and the WeCom entry point.<br/>配置 agent-autoloop 重跑和企业微信入口。 |
 
