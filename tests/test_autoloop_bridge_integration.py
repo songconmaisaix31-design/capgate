@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
@@ -188,6 +189,57 @@ def test_api_preserves_budget(capgate_server):
     assert "env_report" in {artifact["name"] for artifact in chain["artifacts"]}
     disabled = httpx.post(f"{url}/api/tasks/{task_id}/rerun", trust_env=False)
     assert disabled.status_code == 503 and "重跑未启用" in disabled.json()["detail"]
+
+
+def test_wecom_history_empty_window_and_boundaries(tmp_path, capgate_server):
+    node = shutil.which("node")
+    if node is None or int(subprocess.check_output([node, "--version"]).split(b".")[0][1:]) < 24:
+        pytest.skip("需安装 Node.js 24 以上版本")
+    caller = getpass.getuser()
+    index = tmp_path / "history" / "wecom.sqlite3"
+    env = dict(
+        os.environ,
+        CAPGATE_BRIDGE_URL=capgate_server,
+        CAPGATE_WECOM_ENABLED="0",
+        CAPGATE_WECOM_GROUPS="",
+        CAPGATE_WECOM_SENDERS=caller,
+        CAPGATE_WECOM_HISTORY_DB=str(index),
+    )
+    subprocess.run([node, str(BRIDGE / "wecom.mjs")], env=env, check=True, capture_output=True)
+    assert not index.exists()
+    subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            "import { prepareIndex } from './wecom-index.mjs'; "
+            "prepareIndex(process.env.CAPGATE_WECOM_HISTORY_DB);",
+        ],
+        cwd=BRIDGE,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    command = [node, str(BRIDGE / "history.mjs"), "--chat", caller]
+    window = ["--since", "2026-11-18T09:00:00+08:00", "--until", "2026-11-18T10:00:00+08:00"]
+    output = subprocess.check_output(
+        [*command, "--kind", "single", *window], env=env, encoding="utf-8"
+    )
+    result = json.loads(output)
+    assert result["since"] == "2026-11-18T01:00:00.000Z"
+    assert result["count"] == 0 and result["summary"] == result["todos"] == []
+
+    denied = subprocess.run(
+        [*command, "--kind", "group", *window], env=env, capture_output=True, encoding="utf-8"
+    )
+    assert denied.returncode == 1 and "白名单未授权" in denied.stderr
+    reversed_window = subprocess.run(
+        [*command, "--kind", "single", "--since", window[3], "--until", window[1]],
+        env=env,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    assert reversed_window.returncode == 1 and "必须晚于" in reversed_window.stderr
 
 
 def test_autoloop_relay_persists_one_event(tmp_path):
