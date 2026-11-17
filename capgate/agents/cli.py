@@ -19,7 +19,6 @@ import re
 import shlex
 import shutil
 import signal
-import subprocess
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -114,54 +113,42 @@ class CLIAdapter:
 async def run_command(
     argv: list[str], prompt: str, timeout_s: float, cwd: str | Path | None = None
 ) -> str:
-    options = (
-        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-        if os.name == "nt"
-        else {"start_new_session": True}
-    )
+    input_bytes = prompt.encode("utf-8")
+    try:
+        if os.name == "nt":
+            from ._windows_job import run_windows_job
+
+            code, stdout, stderr = await run_windows_job(argv, input_bytes, timeout_s, cwd)
+        else:
+            code, stdout, stderr = await _run_posix_command(argv, input_bytes, timeout_s, cwd)
+    except TimeoutError as exc:
+        raise AgentError(f"CLI agent 超时（{timeout_s}s）") from exc
+    if code != 0:
+        detail = stderr.decode("utf-8", "replace")[:800]
+        raise AgentError(f"CLI agent 退出码 {code}：{detail}")
+    return stdout.decode("utf-8", "replace")
+
+
+async def _run_posix_command(
+    argv: list[str], input_bytes: bytes, timeout_s: float, cwd: str | Path | None
+) -> tuple[int | None, bytes, bytes]:
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd or None,
-        **options,
+        start_new_session=True,
     )
     try:
         async with asyncio.timeout(timeout_s):
-            stdout, stderr = await proc.communicate(prompt.encode("utf-8"))
-    except TimeoutError as exc:
-        await _terminate_tree(proc)
-        raise AgentError(f"CLI agent 超时（{timeout_s}s）") from exc
-    except asyncio.CancelledError:
-        await _terminate_tree(proc)
-        raise
-    if proc.returncode != 0:
-        detail = stderr.decode("utf-8", "replace")[:800]
-        raise AgentError(f"CLI agent 退出码 {proc.returncode}：{detail}")
-    return stdout.decode("utf-8", "replace")
-
-
-async def _terminate_tree(proc: asyncio.subprocess.Process) -> None:
-    if os.name == "nt":
-        if proc.returncode is None:
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill.exe",
-                "/T",
-                "/F",
-                "/PID",
-                str(proc.pid),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            output, _ = await killer.communicate()
-            if killer.returncode != 0 and proc.returncode is None:
-                detail = output.decode(errors="replace").strip()
-                raise AgentError(f"CLI 子进程树 {proc.pid} 未能终止：{detail}")
-    else:
+            stdout, stderr = await proc.communicate(input_bytes)
+    except (TimeoutError, asyncio.CancelledError):
         with suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGKILL)
-    await proc.wait()
+        await proc.wait()
+        raise
+    return proc.returncode, stdout, stderr
 
 
 async def _run_codex(
