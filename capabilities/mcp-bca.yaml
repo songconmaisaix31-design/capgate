@@ -6,8 +6,8 @@ versions:
     transport: stdio
     command: node
     args:
-      - "${CAPGATE_BCA_HOME:C:/Users/DW/orca/blockchain-anything}/dist/mcp/main.js"
-    cwd: "${CAPGATE_BCA_HOME:C:/Users/DW/orca/blockchain-anything}"
+      - "${CAPGATE_BCA_HOME:C:/Users/DW/repos/blockchain-anything}/dist/mcp/main.js"
+    cwd: "${CAPGATE_BCA_HOME:C:/Users/DW/repos/blockchain-anything}"
     # 白名单：BCA 暴露 125 个工具，全量塞进上下文会挤掉真正要用的那几个
     tools:
       - capability_list
