@@ -52,9 +52,12 @@ function runtime({ client, scope, storage, inbox, hub, stopped }) {
         .catch(() => console.error(`飞书事件 ${event} 的接收回执未送达，将继续处理并发送结果。`));
     }
     const run = await waitEvent(hub, event, signal);
-    return run.state === 'done' && run.summary
-      ? run.summary
-      : `事件 ${event} 未完成，请查看 agent-autoloop 运行记录 ${run.run}。`;
+    if (run.state === 'done' && run.summary) return run.summary;
+    const state = { done: '执行结束', nothing: '没有可执行的任务', cancelled: '处理已停止' }[run.state];
+    const reason = typeof run.error === 'string' && run.error.trim() ? run.error : run.summary;
+    const detail = typeof reason === 'string' && reason.trim() ? `原因 ${reason.trim()}` : '';
+    const response = `事件 ${event} ${state}，agent-autoloop 运行编号 ${run.run}。${detail}`;
+    return response.length <= 500 ? response : `${response.slice(0, 499).replace(/[\ud800-\udbff]$/u, '')}…`;
   }
 
   async function deliver(row) {
