@@ -84,3 +84,9 @@ node integrations/agent-autoloop/history.mjs --kind single --chat <飞书单聊I
 ```
 
 如需核对断线区间，提供应用凭证、设置 `CAPGATE_LARK_REMOTE_HISTORY=1`，并为同一条命令加 `--remote`。它只调用分配给该机器人且在白名单中的单聊，以飞书消息创建时间过滤，只整理白名单发送者的内容。远端历史查询只读，不下载历史附件、不重新派发任务。输出为 JSON，含消息 ID 和时间。摘要使用现有任务结论或消息摘录，待办保留原文明确提出的行动项。整理不调用模型。 [飞书会话历史 API](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/list)
+
+### 平台验收状态
+
+隔离测试企业已关联并启用机器人，开通本节列出的四项权限并配置 `im.message.receive_v1` 长连接。飞书官方后台显示连接成功。`node lark.mjs --bootstrap --verify-reconnect` 关闭测试进程建立的 TLS 连接后，官方 SDK 自动重连成功。
+
+使用测试应用身份通过飞书官方文件 API 上传并下载了公开项目的 `go.mod`，下载文件与原文件的 SHA-256 一致。真实单聊触发、原会话回复、会话附件下载和非空远端历史仍待验收。官方 OAuth 会话当前仅识别原企业身份，平台提示该身份无权使用测试机器人。继续验收需使用测试企业的用户单独扫码登录。
