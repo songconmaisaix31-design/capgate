@@ -222,9 +222,7 @@ def test_lark_history_empty_window_and_boundaries(tmp_path, capgate_server):
     )
     command = [node, str(BRIDGE / "history.mjs"), "--kind", "single"]
     window = ["--since", "2026-11-18T09:00:00+08:00", "--until", "2026-11-18T10:00:00+08:00"]
-    output = subprocess.check_output(
-        [*command, "--chat", chat, *window], env=env, encoding="utf-8"
-    )
+    output = subprocess.check_output([*command, "--chat", chat, *window], env=env, encoding="utf-8")
     result = json.loads(output)
     assert result["since"] == "2026-11-18T01:00:00.000Z"
     assert result["count"] == 0 and result["summary"] == result["todos"] == []

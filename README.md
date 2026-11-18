@@ -157,7 +157,7 @@ python -m capgate solve "区块链有哪些能力可用？" -t 区块链 -t 能�
 | [docs/model-routing.md](docs/model-routing.md) | Configure a model endpoint and examine usage and routing decisions.<br/>配置模型端点，查看用量和路由裁决。 |
 | [docs/codex-artifact.md](docs/codex-artifact.md) | Supply source files and verify the generated Codex diff.<br/>提供原始文件并核对生成的 Codex 补丁。 |
 | [docs/storage.md](docs/storage.md) | Inspect retained artifacts, streaming contracts and local writer coordination.<br/>了解产物保留、流式契约和本机写入协调。 |
-| [integrations/agent-autoloop/README.md](integrations/agent-autoloop/README.md) | Configure agent-autoloop reruns and the WeCom entry point.<br/>配置 agent-autoloop 重跑和企业微信入口。 |
+| [integrations/agent-autoloop/README.md](integrations/agent-autoloop/README.md) | Configure agent-autoloop reruns, the Feishu private-chat entry point and history queries.<br/>配置 agent-autoloop 重跑、飞书单聊入口和历史查询。 |
 
 ## Repository layout · 仓库结构
 
@@ -191,7 +191,7 @@ capgate/
 | Codex | A public Go repository task ran via HTTP and the native Codex controller. The generated diff passed `git apply --check`; each event ID matched a SQLite row and the native session.<br/>公开 Go 项目的任务经过 HTTP 和 Codex 原生控制器。diff 通过 `git apply --check`，每个事件编号都在 SQLite 中核对，并与原生会话对应。 |
 | Model routing · 模型路由 | A live DeepSeek endpoint verified retrieval, token accounting, and the routing judge. Usage is also retained when an artifact fails validation.<br/>真实 DeepSeek 端点验证了检索、用量统计和模型裁决。产物校验失败时仍保留已知用量。 |
 | Selfhost · 自举 | The gateway ran the lint, triage and README checks. The restricted write flow requires an operator-reviewed patch, and the ledger stores the diff and execution reason.<br/>网关运行了静态检查、待办梳理和 README 校验。受限写入需要操作者审核 patch，账本保留 diff 和执行理由。 |
-| Agent-autoloop | A real local worker reran a FIT task, and repeated requests reused the same event and task. The WeCom entry point requires a real bot to verify message delivery, attachments and reconnection.<br/>实际本机工作器重跑了 FIT 任务，重复请求复用同一事件与任务。企业微信入口的收发、附件与重连仍需真实机器人验收。 |
+| Agent-autoloop | A real local worker reran a FIT task, and repeated requests reused the same event and task. Live Feishu verification of private-chat messages, attachments, remote history and reconnection is pending.<br/>实际本机工作器重跑了 FIT 任务，重复请求复用同一事件与任务。飞书单聊收发、附件、远端历史和重连仍待真实机器人验收。 |
 | Streaming · 流式产物 | The downstream environment started before the final snapshot and produced matching summaries. Two warmed benchmarks of six alternating pairs each measured median end-to-end latency of 64–66 ms streaming and 44–47 ms in batch mode. The latency target remains unmet for this workload.<br/>下游在最终快照完成前开始处理，汇总结果一致。两组实测在预热后各交替执行六对任务，端到端时延中位数为流式 64–66 ms、整块 44–47 ms。该工作负载的时延验收尚未通过。 |
 
 ## License · 许可
