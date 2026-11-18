@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .db import Locked, connect
-from .models import Artifact, Decision, EnvManifest, RunResult, TaskSpec, utcnow
+from .db import FileLock, Locked, connect, lock_path_for
+from .models import Artifact, Decision, EnvManifest, GcItem, RunResult, TaskSpec, utcnow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -83,9 +84,22 @@ CREATE TABLE IF NOT EXISTS artifacts (
     version     INTEGER NOT NULL DEFAULT 1,
     sha256      TEXT NOT NULL,
     path        TEXT NOT NULL,
-    bytes       INTEGER NOT NULL DEFAULT 0
+    bytes       INTEGER NOT NULL DEFAULT 0,
+    stream      INTEGER NOT NULL DEFAULT 0,
+    truncated   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_artifacts_task ON artifacts(task_id, name);
+
+CREATE TABLE IF NOT EXISTS artifact_refs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL,
+    task_id         TEXT NOT NULL,   -- 消费者所属任务
+    artifact_sha256 TEXT NOT NULL,   -- 被消费产物的内容地址
+    consumer_env    TEXT NOT NULL,
+    consumer_run    TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_artifact_refs_sha ON artifact_refs(artifact_sha256);
+CREATE INDEX IF NOT EXISTS ix_artifact_refs_task ON artifact_refs(task_id);
 
 CREATE TABLE IF NOT EXISTS outcomes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +117,11 @@ CREATE INDEX IF NOT EXISTS ix_outcomes_task ON outcomes(task_id);
 class Ledger:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
-        self._conn = Locked(connect(self.path))
+        self._flock = FileLock(lock_path_for(self.path))
+        # connect 里的 PRAGMA journal_mode=WAL 是数据库级写操作，必须和别的进程
+        # 的 connect 串行，否则并发初始化会撞出 "database is locked"。
+        with self._flock:
+            self._conn = Locked(connect(self.path), self._flock)
         self.init_schema()
 
     # ------------------------------------------------------------ 基础设施
@@ -111,7 +129,16 @@ class Ledger:
     def init_schema(self) -> None:
         with self._conn as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
             conn.commit()
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """给老账本补列：CREATE TABLE IF NOT EXISTS 不会改动已存在的表。"""
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(artifacts)").fetchall()}
+        if "stream" not in cols:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN stream INTEGER NOT NULL DEFAULT 0")
+        if "truncated" not in cols:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self._conn.close()
@@ -134,6 +161,30 @@ class Ledger:
                 ),
             )
             conn.commit()
+
+    def reserve_task(self, spec: TaskSpec) -> bool:
+        """原子保留任务 id，供上游请求幂等：已存在则返回 False。
+
+        HTTP 集成需要——同一个 task id 的重复请求不能重复入账。用
+        ``INSERT ... ON CONFLICT(id) DO NOTHING``，靠 rowcount 判断是否真的插入。
+        """
+        with self._conn as conn:
+            cur = conn.execute(
+                "INSERT INTO tasks(id,created_at,task_type,goal,tags,spec,status)"
+                " VALUES (?,?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO NOTHING",
+                (
+                    spec.id,
+                    utcnow(),
+                    spec.task_type,
+                    spec.goal,
+                    json.dumps(spec.tags, ensure_ascii=False),
+                    spec.model_dump_json(),
+                    "running",
+                ),
+            )
+            conn.commit()
+            return cur.rowcount == 1
 
     def finish_task(self, task_id: str, status: str, error: str | None = None) -> None:
         with self._conn as conn:
@@ -216,8 +267,8 @@ class Ledger:
     def add_artifact(self, task_id: str, artifact: Artifact) -> None:
         with self._conn as conn:
             conn.execute(
-                "INSERT INTO artifacts(ts,task_id,run_id,env_id,name,version,sha256,path,bytes)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO artifacts(ts,task_id,run_id,env_id,name,version,sha256,path,bytes,"
+                "stream,truncated) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     artifact.created_at,
                     task_id,
@@ -228,7 +279,25 @@ class Ledger:
                     artifact.sha256,
                     artifact.path,
                     artifact.bytes,
+                    1 if artifact.stream else 0,
+                    1 if artifact.truncated else 0,
                 ),
+            )
+            conn.commit()
+
+    def add_artifact_ref(
+        self,
+        task_id: str,
+        artifact_sha256: str,
+        consumer_env: str,
+        consumer_run: str | None = None,
+    ) -> None:
+        """登记一次产物消费，喂给 GC 的引用计数：被未完成任务消费的产物不能删。"""
+        with self._conn as conn:
+            conn.execute(
+                "INSERT INTO artifact_refs(ts,task_id,artifact_sha256,consumer_env,consumer_run)"
+                " VALUES (?,?,?,?,?)",
+                (utcnow(), task_id, artifact_sha256, consumer_env, consumer_run),
             )
             conn.commit()
 
@@ -387,6 +456,76 @@ class Ledger:
             "artifacts": self.artifacts(task_id),
             "events": self.events(task_id),
         }
+
+    # ------------------------------------------------------------ 引用计数与 GC
+
+    def unfinished_task_ids(self) -> set[str]:
+        """仍在运行的任务：它们的产物不受 TTL 约束。"""
+        with self._conn as conn:
+            rows = conn.execute("SELECT id FROM tasks WHERE status='running'").fetchall()
+        return {r["id"] for r in rows}
+
+    def referenced_sha256s(self) -> set[str]:
+        """被未完成任务消费的产物内容地址——这些产物即使超 TTL 也要保留。"""
+        unfinished = self.unfinished_task_ids()
+        if not unfinished:
+            return set()
+        with self._conn as conn:
+            rows = conn.execute("SELECT artifact_sha256, task_id FROM artifact_refs").fetchall()
+        return {r["artifact_sha256"] for r in rows if r["task_id"] in unfinished}
+
+    def artifact_ref_count(self, sha256: str) -> int:
+        with self._conn as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) c FROM artifact_refs WHERE artifact_sha256=?", (sha256,)
+            ).fetchone()
+        return int(row["c"] or 0)
+
+    def gc_candidates(
+        self, ttl_days: float = 30.0, now: datetime | None = None
+    ) -> tuple[list[GcItem], int, int]:
+        """返回 (过期且未被引用的产物, 过期但因引用而保留的产物数, 扫描总数)。
+
+        保护规则：任务未完成（status=running）的产物不删；被未完成任务消费的
+        产物不删（引用计数）。时间戳读不出来就保守地当"不过期"处理。
+        """
+        now = now or datetime.now(UTC)
+        cutoff = now - timedelta(days=ttl_days)
+        unfinished = self.unfinished_task_ids()
+        referenced = self.referenced_sha256s()
+        with self._conn as conn:
+            rows = conn.execute("SELECT task_id, sha256, path, bytes, ts FROM artifacts").fetchall()
+        candidates: list[GcItem] = []
+        protected = 0
+        for r in rows:
+            d = dict(r)
+            try:
+                ts = datetime.fromisoformat(d["ts"])
+            except (TypeError, ValueError):
+                continue
+            if ts > cutoff:
+                continue
+            if d["task_id"] in unfinished or d["sha256"] in referenced:
+                protected += 1
+                continue
+            candidates.append(
+                GcItem(
+                    path=d["path"],
+                    sha256=d["sha256"],
+                    bytes=int(d["bytes"] or 0),
+                    task_id=d["task_id"],
+                    age_days=(now - ts).total_seconds() / 86400,
+                )
+            )
+        return candidates, protected, len(rows)
+
+    def record_gc(self, task_id: str, artifact_sha256: str, path: str, size: int) -> None:
+        """把一次产物删除写进账本（artifact.gc 事件），可审计。"""
+        self.event(
+            task_id,
+            "artifact.gc",
+            {"sha256": artifact_sha256, "path": path, "bytes": size},
+        )
 
 
 def _loads(raw: str) -> Any:

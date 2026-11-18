@@ -12,12 +12,20 @@ recipe 的每一步：
     - emit:
         name: 产物名
         body: {...}
+    - stream_emit:          # 流式 producer：把 body 作为一条 chunk 写进通道
+        name: 产物名
+        body: {...}
+    - stream_collect:       # 流式 consumer：增量读通道直到 until 的 key 齐了
+        name: 产物名
+        until: [key, ...]
+      as: 变量名            # 合并后的对象存进命名空间
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from ..artifacts import current_stream
 from .base import AgentAdapter, AgentContext, AgentError, AgentOutput, register, render
 
 
@@ -46,6 +54,65 @@ class ScriptedAdapter:
                 ns[name] = body
                 trace.append({"step": index, "emit": name, "ok": True})
                 ctx.log("agent.emit", {"name": name, "bytes": len(str(body))})
+                continue
+
+            if "stream_emit" in step:
+                emitted = render(step["stream_emit"], ns)
+                name = emitted.get("name")
+                if not name:
+                    raise AgentError(f"第 {index} 步 stream_emit 缺少 name")
+                session = current_stream.get()
+                if session is None or name not in session.writers:
+                    raise AgentError(
+                        f"第 {index} 步 stream_emit 的 {name!r} 没有流式写入器"
+                        "（env 要声明 stream: true 且走流式编排）"
+                    )
+                session.writers[name].write_chunk(emitted.get("body"))
+                count = len(session.writers[name].chunks)
+                trace.append({"step": index, "stream_emit": name, "chunk": count})
+                ctx.log("agent.stream_chunk", {"name": name, "chunk": count})
+                continue
+
+            if "stream_collect" in step:
+                spec = step["stream_collect"]
+                name = spec.get("name")
+                if not name:
+                    raise AgentError(f"第 {index} 步 stream_collect 缺少 name")
+                session = current_stream.get()
+                if session is None or name not in session.readers:
+                    raise AgentError(
+                        f"第 {index} 步 stream_collect 的 {name!r} 没有流式读取器"
+                        "（上游要声明 stream: true 且走流式编排）"
+                    )
+                reader = session.readers[name]
+                until = spec.get("until", [])
+                await reader.wait_for(until)
+                ns[step.get("as") or name] = reader.merged
+                trace.append(
+                    {
+                        "step": index,
+                        "stream_collect": name,
+                        "until": until,
+                        "truncated": reader.truncated,
+                        "before_seal": reader.first_chunk_before_seal,
+                    }
+                )
+                ctx.log(
+                    "agent.stream_collect",
+                    {
+                        "name": name,
+                        "until": until,
+                        "truncated": reader.truncated,
+                        "before_seal": reader.first_chunk_before_seal,
+                    },
+                )
+                # 收到显式 truncated 却仍缺必填 key：诊断必须点出 truncated，而不是
+                # 让下一步的"模板变量不存在"去掩盖真相。
+                missing = [k for k in until if k not in reader.merged]
+                if missing and reader.truncated:
+                    raise AgentError(
+                        f"流式产物 {name} 已截断（truncated），缺少字段 {missing}，下游无法继续"
+                    )
                 continue
 
             capability = step.get("capability")

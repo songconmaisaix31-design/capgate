@@ -1,0 +1,37 @@
+id: crawler-stream
+domain: 数据采集
+tags: [流式]
+prior: 3.0
+stream: true
+capabilities:
+  - id: mcp-fetch
+    kind: mcp
+    version: ">=0.1,<0.2"
+    shared: true
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.url }}" }, as: page }
+    - stream_emit:
+        name: crawl_batch
+        body:
+          url: "{{ page.url }}"
+          title: "{{ page.title }}"
+          fetched_at: "{{ now }}"
+    - { capability: mcp-fetch, tool: extract_links, args: { html: "{{ page.html }}", base: "{{ page.url }}" }, as: links }
+    - stream_emit:
+        name: crawl_batch
+        body:
+          links: "{{ links.links }}"
+    - { capability: mcp-fetch, tool: extract_text, args: { html: "{{ page.html }}" }, as: text }
+    - stream_emit:
+        name: crawl_batch
+        body:
+          text: "{{ text.text }}"
+artifacts:
+  produces: [crawl_batch]
+resources:
+  warm: true
+  max_parallel: 4
+notes: 流式演示：边爬边喂，把 crawl_batch 拆成 chunk 逐条落盘，下游可增量消费。
