@@ -192,7 +192,7 @@ capgate/
 | Model routing · 模型路由 | A live DeepSeek endpoint verified retrieval, token accounting, and the routing judge. Usage is also retained when an artifact fails validation.<br/>真实 DeepSeek 端点验证了检索、用量统计和模型裁决。产物校验失败时仍保留已知用量。 |
 | Selfhost · 自举 | The gateway ran the lint, triage and README checks. The restricted write flow requires an operator-reviewed patch, and the ledger stores the diff and execution reason.<br/>网关运行了静态检查、待办梳理和 README 校验。受限写入需要操作者审核 patch，账本保留 diff 和执行理由。 |
 | Agent-autoloop | A real local worker reran a FIT task, and repeated requests reused the same event and task. Live Feishu verification of private-chat messages, attachments, remote history and reconnection is pending.<br/>实际本机工作器重跑了 FIT 任务，重复请求复用同一事件与任务。飞书单聊收发、附件、远端历史和重连仍待真实机器人验收。 |
-| Streaming · 流式产物 | The downstream environment started before the final snapshot and produced matching summaries. Two warmed benchmarks of six alternating pairs each measured median end-to-end latency of 64–66 ms streaming and 44–47 ms in batch mode. The latency target remains unmet for this workload.<br/>下游在最终快照完成前开始处理，汇总结果一致。两组实测在预热后各交替执行六对任务，端到端时延中位数为流式 64–66 ms、整块 44–47 ms。该工作负载的时延验收尚未通过。 |
+| Streaming · 流式产物 | For the same SQLite documentation workload, six alternating pairs per SDK yielded matching snapshots and summaries. Median task time fell from 3941.288 to 2630.218 ms with MCP 1.30.0 (33.27%) and from 3952.695 to 2589.230 ms with MCP 2.3.0 (34.49%). The single-page demo measured 50.5 ms in batch mode and 69.5 ms in streaming mode on MCP 2.3.0.<br/>两版 SDK 对同一组 SQLite 官方文档各交替执行六对任务，快照和汇总一致。端到端耗时中位数在 MCP 1.30.0 上由 3941.288 ms 降至 2630.218 ms（降低 33.27%），在 MCP 2.3.0 上由 3952.695 ms 降至 2589.230 ms（降低 34.49%）。MCP 2.3.0 的单页示例为整批 50.5 ms、流式 69.5 ms。 |
 
 ## License · 许可
 
