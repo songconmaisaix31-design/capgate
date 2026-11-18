@@ -5,9 +5,9 @@ import { DatabaseSync } from 'node:sqlite';
 const MAX_MESSAGES = 250;
 
 function openIndex(file, readOnly) {
-  if (!path.isAbsolute(file)) throw new Error('企微历史索引必须使用绝对路径');
+  if (!path.isAbsolute(file)) throw new Error('飞书历史索引必须使用绝对路径');
   if (readOnly) {
-    if (!existsSync(file)) throw new Error('企微历史索引尚未建立，请检查入口和工作器的索引配置');
+    if (!existsSync(file)) throw new Error('飞书历史索引尚未建立，请检查入口和工作器的索引配置');
   } else {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     closeSync(openSync(file, 'a', 0o600));
@@ -19,16 +19,16 @@ function openIndex(file, readOnly) {
 
 function ensureSchema(database) {
   database.exec(`
-    CREATE TABLE IF NOT EXISTS wecom_messages (
+    CREATE TABLE IF NOT EXISTS lark_messages (
       event_id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
-      kind TEXT NOT NULL CHECK (kind IN ('single', 'group')),
+      kind TEXT NOT NULL CHECK (kind = 'single'),
       chat TEXT NOT NULL,
       sender TEXT NOT NULL,
       message_id TEXT NOT NULL,
       received_ms INTEGER NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS wecom_messages_window ON wecom_messages(kind, chat, received_ms);
+    CREATE INDEX IF NOT EXISTS lark_messages_window ON lark_messages(kind, chat, received_ms);
   `);
 }
 
@@ -48,7 +48,7 @@ export function indexMessage(file, source, taskId) {
   try {
     ensureSchema(database);
     const row = database.prepare(`
-      INSERT INTO wecom_messages (event_id, task_id, kind, chat, sender, message_id, received_ms)
+      INSERT INTO lark_messages (event_id, task_id, kind, chat, sender, message_id, received_ms)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(event_id) DO UPDATE SET event_id = excluded.event_id
         WHERE task_id = excluded.task_id AND kind = excluded.kind AND chat = excluded.chat
@@ -56,7 +56,7 @@ export function indexMessage(file, source, taskId) {
           AND received_ms = excluded.received_ms
       RETURNING event_id
     `).get(source.event_id, taskId, source.kind, source.chat, source.sender, source.message_id, received);
-    if (!row) throw new Error('企微消息引用与同一事件的已有索引不一致');
+    if (!row) throw new Error('飞书消息引用与同一事件的已有索引不一致');
   } finally {
     database.close();
   }
@@ -67,7 +67,7 @@ export function messagesIn(file, { kind, chat, since, until, senders }) {
   try {
     const messages = database.prepare(`
       SELECT event_id, task_id, kind, chat, sender, message_id, received_ms
-      FROM wecom_messages
+      FROM lark_messages
       WHERE kind = ? AND chat = ? AND received_ms >= ? AND received_ms < ?
         AND sender IN (SELECT value FROM json_each(?))
       ORDER BY received_ms, event_id

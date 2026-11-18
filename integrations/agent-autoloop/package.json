@@ -5,6 +5,6 @@
   "type": "module",
   "engines": { "node": ">=24" },
   "dependencies": {
-    "@wecom/aibot-node-sdk": "1.0.7"
+    "@larksuiteoapi/node-sdk": "1.76.0"
   }
 }

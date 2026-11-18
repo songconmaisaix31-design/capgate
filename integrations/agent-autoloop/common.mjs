@@ -1,7 +1,13 @@
 import { setTimeout } from 'node:timers/promises';
 
 export const RERUN_EVENT = 'capgate.rerun';
-export const WECOM_EVENT = 'capgate.wecom.message';
+export const LARK_EVENT = 'capgate.lark.message';
+
+export class UnroutedEventError extends Error {
+  constructor(event) {
+    super(`事件 ${event} 没有匹配的 agent-autoloop 规则`);
+  }
+}
 
 export function required(name) {
   const value = process.env[name];
@@ -40,7 +46,7 @@ export function autoloop(tokenName) {
 export async function submitEvent(hub, body, signal) {
   const receipt = await hub('/v1/events', { body, signal });
   if (!Number.isInteger(receipt.event)) throw new Error('agent-autoloop 未返回事件编号');
-  if (!receipt.routed?.length) throw new Error(`事件 ${receipt.event} 没有匹配的 agent-autoloop 规则`);
+  if (!receipt.routed?.length) throw new UnroutedEventError(receipt.event);
   return receipt;
 }
 
