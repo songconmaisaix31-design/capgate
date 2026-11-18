@@ -29,7 +29,7 @@ export async function saveAttachments(client, directory, messageId, resources, s
     const stream = response.getReadableStream();
     if (response.headers?.['content-type']?.includes('application/json') && !response.headers['content-disposition']) {
       stream.destroy();
-      throw new MessageError('飞书未返回附件，请检查机器人权限和消息。');
+      throw new Error('飞书附件 API 未返回二进制内容');
     }
     const limit = new Transform({
       transform(chunk, _encoding, next) {
