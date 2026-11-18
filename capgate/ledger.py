@@ -309,13 +309,16 @@ class Ledger:
         task_type: str | None = None,
         adapter: str | None = None,
         model: str | None = None,
+        *,
+        by_env: bool = False,
     ) -> list[dict[str, Any]]:
-        """按 (env, adapter, model) 聚合的成败与耗时。
+        """聚合已完成的运行。领域路由合并模型样本，模型路由保留适配器和模型维度。
 
         成败判定：run 成功 **且** 没有人工差评。人工标签优先于自动判定。
         """
-        sql = """
-        SELECT r.env_id AS env_id, r.adapter AS adapter, r.model AS model,
+        dimensions = "r.env_id" if by_env else "r.env_id, r.adapter, r.model"
+        sql = f"""
+        SELECT {dimensions},
                COUNT(*) AS n,
                SUM(CASE WHEN r.status='ok' AND COALESCE(o.success,1)=1 THEN 1 ELSE 0 END) AS wins,
                AVG(CASE WHEN r.latency_ms>0 THEN r.latency_ms END) AS avg_ms
@@ -330,7 +333,8 @@ class Ledger:
           AND (?2 IS NULL OR t.task_type = ?2)
           AND (?3 IS NULL OR r.adapter = ?3)
           AND (?4 IS NULL OR r.model = ?4)
-        GROUP BY r.env_id, r.adapter, r.model
+          AND r.status <> 'running'
+        GROUP BY {dimensions}
         """
         with self._conn as conn:
             rows = conn.execute(sql, (env_id, task_type, adapter, model)).fetchall()

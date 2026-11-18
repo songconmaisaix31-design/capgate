@@ -7,19 +7,9 @@ agent:
   adapter: cli
   models: [gpt-6.1-sol]
   config:
-    command:
-      - codex
-      - exec
-      - "-m"
-      - gpt-6.1-sol
-      - "-s"
-      - workspace-write
-      - "--skip-git-repo-check"
-      - "-C"
-      - "C:/Users/DW/repos/capgate"
-      - "-"
+    command: [codex]
+    output_mode: codex_jsonl
     timeout_s: 1200
-    cwd: "C:/Users/DW/repos/capgate"
 artifacts:
   produces: [codex_change]
-notes: 用 Codex CLI 的 6.1-sol 改代码。沙箱是 workspace-write，不联网；不 commit、不 push。
+notes: Codex 仅使用随任务提供的上下文，输出结构化代码变更建议。
