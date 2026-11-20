@@ -1,0 +1,57 @@
+id: analyst-pages-stream
+domain: 内容分析
+tags: [多页流式]
+prior: 2.5
+stream: true
+capabilities:
+  - id: sdk-text
+    kind: sdk
+    version: "*"
+    shared: true
+  - id: mcp-fetch
+    kind: mcp
+    version: ">=0.1,<0.2"
+    # 上下游各用独立连接：分析侧的可用性校验与抓取侧不能共享同一 stdio 进程。
+    shared: false
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - stream_collect: { name: crawl_pages, until: [page_0] }
+      as: acc
+    - { capability: sdk-text, tool: summarize_links, args: { links: "{{ acc.page_0.links }}" }, as: s0 }
+    - { capability: sdk-text, tool: word_freq, args: { text: "{{ acc.page_0.text }}" }, as: f0 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.references.0 }}" }, as: a0 }
+    - stream_collect: { name: crawl_pages, until: [page_1] }
+      as: acc
+    - { capability: sdk-text, tool: summarize_links, args: { links: "{{ acc.page_1.links }}" }, as: s1 }
+    - { capability: sdk-text, tool: word_freq, args: { text: "{{ acc.page_1.text }}" }, as: f1 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.references.1 }}" }, as: a1 }
+    - stream_collect: { name: crawl_pages, until: [page_2] }
+      as: acc
+    - { capability: sdk-text, tool: summarize_links, args: { links: "{{ acc.page_2.links }}" }, as: s2 }
+    - { capability: sdk-text, tool: word_freq, args: { text: "{{ acc.page_2.text }}" }, as: f2 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.references.2 }}" }, as: a2 }
+    - stream_collect: { name: crawl_pages, until: [page_3] }
+      as: acc
+    - { capability: sdk-text, tool: summarize_links, args: { links: "{{ acc.page_3.links }}" }, as: s3 }
+    - { capability: sdk-text, tool: word_freq, args: { text: "{{ acc.page_3.text }}" }, as: f3 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.references.3 }}" }, as: a3 }
+    - emit:
+        name: analysis_report
+        body:
+          source: "{{ acc.page_0.url }}"
+          pages:
+            - { url: "{{ acc.page_0.url }}", total_links: "{{ s0.total }}", hosts: "{{ s0.hosts }}", top_terms: "{{ f0.top }}" }
+            - { url: "{{ acc.page_1.url }}", total_links: "{{ s1.total }}", hosts: "{{ s1.hosts }}", top_terms: "{{ f1.top }}" }
+            - { url: "{{ acc.page_2.url }}", total_links: "{{ s2.total }}", hosts: "{{ s2.hosts }}", top_terms: "{{ f2.top }}" }
+            - { url: "{{ acc.page_3.url }}", total_links: "{{ s3.total }}", hosts: "{{ s3.hosts }}", top_terms: "{{ f3.top }}" }
+          availability:
+            - { url: "{{ a0.url }}", status: "{{ a0.status }}" }
+            - { url: "{{ a1.url }}", status: "{{ a1.status }}" }
+            - { url: "{{ a2.url }}", status: "{{ a2.status }}" }
+            - { url: "{{ a3.url }}", status: "{{ a3.status }}" }
+artifacts:
+  consumes: [crawl_pages]
+  produces: [analysis_report]
+notes: 多页分析（流式）：每页 chunk 一到就统计链接/词频并校验交叉引用文档，不等整块收齐。

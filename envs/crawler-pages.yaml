@@ -1,0 +1,31 @@
+id: crawler-pages
+domain: 数据采集
+tags: [多页抓取]
+prior: 3.0
+capabilities:
+  - id: mcp-fetch
+    kind: mcp
+    version: ">=0.1,<0.2"
+    # 上下游各用独立连接：多页抓取与分析都走 mcp-fetch 时不能共享同一 stdio 进程。
+    shared: false
+agent:
+  adapter: scripted
+  models: [rule-v1]
+  recipe:
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.urls.0 }}" }, as: p0 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.urls.1 }}" }, as: p1 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.urls.2 }}" }, as: p2 }
+    - { capability: mcp-fetch, tool: fetch_url, args: { url: "{{ input.urls.3 }}" }, as: p3 }
+    - emit:
+        name: crawl_pages
+        body:
+          page_0: { url: "{{ p0.url }}", title: "{{ p0.title }}", links: "{{ p0.links }}", text: "{{ p0.text }}" }
+          page_1: { url: "{{ p1.url }}", title: "{{ p1.title }}", links: "{{ p1.links }}", text: "{{ p1.text }}" }
+          page_2: { url: "{{ p2.url }}", title: "{{ p2.title }}", links: "{{ p2.links }}", text: "{{ p2.text }}" }
+          page_3: { url: "{{ p3.url }}", title: "{{ p3.title }}", links: "{{ p3.links }}", text: "{{ p3.text }}" }
+artifacts:
+  produces: [crawl_pages]
+resources:
+  warm: true
+  max_parallel: 4
+notes: 多页抓取（整块）：逐页 fetch_url，收齐后一次性产出 crawl_pages（page_0..3 键控分页）。

@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "analysis_report",
+  "type": "object",
+  "required": ["source", "pages", "availability"],
+  "properties": {
+    "source": { "type": "string" },
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "total_links"],
+        "properties": {
+          "url": { "type": "string" },
+          "total_links": { "type": "integer" },
+          "hosts": { "type": "object" },
+          "top_terms": { "type": "array" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "availability": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "status"],
+        "properties": {
+          "url": { "type": "string" },
+          "status": { "type": "integer" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

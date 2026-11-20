@@ -72,3 +72,44 @@ async def run_stream_comparison(system: System) -> tuple[TaskResult, TaskResult]
     block = await run_demo(system, "pipeline")
     stream = await run_demo(system, "stream")
     return block, stream
+
+
+# 多页抓取与分析（issue #6 真实负载）：两种模式处理完全相同的公开文档列表，
+# 上游逐页 fetch_url，下游逐页统计链接/词频并校验交叉引用文档可用性。
+# 整块与流式只有产物交接时机不同——流式每页一 chunk，下游可先于整块收齐开始分析。
+_PAGES_GOAL = "抓取多份公开技术文档，逐页统计链接与词频并校验交叉引用文档可用性"
+_PAGES_TAGS = ["爬虫", "汇总"]
+
+
+def build_pages_task(
+    urls: list[str],
+    references: list[str],
+    *,
+    stream: bool = False,
+    goal: str | None = None,
+) -> TaskSpec:
+    """构造多页抓取分析任务；hint_envs 明确指定整块或流式的上下游 env。"""
+    envs = (
+        ["crawler-pages-stream", "analyst-pages-stream"]
+        if stream
+        else ["crawler-pages", "analyst-pages"]
+    )
+    return TaskSpec(
+        goal=goal or _PAGES_GOAL,
+        tags=list(_PAGES_TAGS),
+        inputs={"urls": list(urls), "references": list(references)},
+        hint_envs=envs,
+        budget_s=120,
+    )
+
+
+async def run_pages_comparison(
+    system: System, urls: list[str], references: list[str]
+) -> tuple[TaskResult, TaskResult]:
+    """同输入对比多页整块（crawler-pages → analyst-pages）与流式（stream 版）。
+
+    两者抓同一组 URL、产出同样的 crawl_pages 与 analysis_report，可对比一致性、SHA 与耗时。
+    """
+    block = await system.orchestrator.run(build_pages_task(urls, references, stream=False))
+    stream = await system.orchestrator.run(build_pages_task(urls, references, stream=True))
+    return block, stream

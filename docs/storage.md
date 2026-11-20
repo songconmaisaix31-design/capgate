@@ -74,17 +74,33 @@ recipe 里两个新步骤：producer 用 `stream_emit`（写一条 chunk），co
 
 ### 演示与实测（crawler-stream → analyst-stream）
 
-`capgate demo -s stream` 运行流式链路。`demo.run_stream_comparison` 用同一示例输入比较
-整块与流式执行。两组实测均在本机 Windows、Python 3.13、预热 MCP 后交替跑六对任务。
+**单页演示（小负载边界）**：`capgate demo -s stream` 运行流式链路。`demo.run_stream_comparison`
+用同一示例 fixture 比较整块与流式。这个离线小页面只有几个很快的串行操作，重叠空间很小，
+流式通道的固定开销盖过了重叠收益，所以流式反而更慢——它保留为"小负载下流式不划算"的边界。
 
 | 模式 | 中位时延 |
 |---|---|
 | 整块 `crawler → analyst` | 44–47 ms |
 | 流式 `crawler-stream → analyst-stream` | 64–66 ms |
 
-流式任务的 `before_seal=True` 事件记录了下游在最终快照前的消费。两种模式的汇总结果一致，
-上游的 `fetched_at` 记录各自运行时间。这个工作负载的端到端时延目标尚未达成。
-SDK 2 的同一单页复测中，六对测量的中位时延为整批 50.5 ms、流式 69.5 ms。
+**多页抓取分析（真实负载，issue #6 验收）**：新增 `crawler-pages → analyst-pages`（整块）
+与 `crawler-pages-stream → analyst-pages-stream`（流式）。两种模式处理完全相同的 4 份 SQLite
+公开技术文档（`pragma` / `fileformat2` / `atomiccommit` / `howtocorrupt`，一次下载后由真实
+本地 HTTP 服务提供），上游逐页 `fetch_url`，下游逐页统计链接与词频并真实校验交叉引用文档
+可用性。唯一差别是产物交接时机：流式每页一个完整 chunk，下游能在整块收齐前开始分析。
+
+用户可执行命令：`python -m tools.stream_throughput`（交替顺序跑 6 对、校验汇总/SHA/截断/审计）。
+实测（本机 Windows、Python 3.13、预热 MCP 后交替 6 对）：
+
+| SDK | 整块中位 | 流式中位 | 加速比 |
+|---|---|---|---|
+| MCP 1.30 | 290 ms | 217 ms | 1.33× |
+| MCP 2.3 | 283 ms | 220 ms | 1.29× |
+
+两种模式每个任务真实工具调用数一致（各 16 次），`analysis_report` 汇总一致、`crawl_pages`
+快照 SHA 一致、流式 `truncated=False`、`before_seal=True` 记录下游在快照前消费。抓取与分析
+都走 `mcp-fetch` 时，上下游用各自独立的 MCP 连接（`shared: false`），共享同一资源预算
+（有界并行数与 HTTP 请求预算），因此流式链路能真正重叠，而不是串行等整块。
 
 ### 官方文档多页对比
 

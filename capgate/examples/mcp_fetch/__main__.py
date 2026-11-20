@@ -12,6 +12,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+import httpx
+
 from capgate.mcp.server import create_server
 
 mcp = create_server("capgate-fetch")
@@ -51,6 +53,22 @@ class _Extract(HTMLParser):
                 self.text.append(chunk)
 
 
+_http_client: httpx.Client | None = None
+
+
+def _client() -> httpx.Client:
+    # 常驻连接池：httpx 每次新开 Client 在 Windows 上约 300ms 的开销，
+    # 真实抓取器都会复用连接，这里也复用以贴近真实负载、避免每请求重新握手。
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client(
+            timeout=20,
+            follow_redirects=True,
+            headers={"User-Agent": "capgate/0.1"},
+        )
+    return _http_client
+
+
 def _read(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme == "file":
@@ -59,11 +77,7 @@ def _read(url: str) -> str:
             raise FileNotFoundError(f"本地文件不存在：{path}")
         return path.read_text(encoding="utf-8", errors="replace")
     if parsed.scheme in ("http", "https"):
-        import httpx
-
-        resp = httpx.get(
-            url, timeout=20, follow_redirects=True, headers={"User-Agent": "capgate/0.1"}
-        )
+        resp = _client().get(url)
         resp.raise_for_status()
         return resp.text
     raise ValueError(f"不支持的协议：{parsed.scheme or '(空)'}")

@@ -436,6 +436,9 @@ class Orchestrator:
         rec = self.ledger.perf(env_id=env.id, task_type=task.task_type)
         rate = (sum(r["wins"] for r in rec) / sum(r["n"] for r in rec)) if rec else 0.0
         samples = sum(r["n"] for r in rec)
+        # 热实例是否保留：env 声明 warm 或成绩达标时保留，否则用完即回收。
+        # 失败路径在 supervisor.execute 内部已强制 keep=False，这里按"假设成功"预判。
+        keep_warm = should_keep_warm(env, rate, samples, True)
 
         requests: list[dict[str, Any]] = []
 
@@ -462,6 +465,7 @@ class Orchestrator:
                 model=model,
                 artifacts=inputs,
                 run_id=run_id,
+                keep_warm=keep_warm,
                 on_event=on_event,
                 stream=stream,
             )
